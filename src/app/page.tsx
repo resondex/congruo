@@ -62,10 +62,10 @@ export default function Home() {
       </div>
 
       <Link
-        href="/review"
+        href="/s/dev/review"
         className="mt-10 inline-block rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white"
       >
-        See the review step
+        See the review step (dev study)
       </Link>
       <p className="mt-3 text-xs text-neutral-500">
         Pre-alpha. The consent, request, and survey steps are not built yet.
