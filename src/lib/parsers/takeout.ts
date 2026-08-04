@@ -37,6 +37,8 @@ interface TakeoutEntry {
   titleUrl?: string
   time?: string
   products?: string[]
+  /** AI Mode only: the generated answer that was shown. */
+  safeHtmlItem?: { html?: string }[]
 }
 
 /**
@@ -107,6 +109,7 @@ export function parseTakeoutActivity(
       action: classifyAction(phrase || title),
       actionPhrase: phrase || undefined,
       url: raw.titleUrl,
+      ...extractAnswer(raw.safeHtmlItem?.[0]?.html ?? ''),
     })
   }
 
@@ -186,6 +189,43 @@ const ENTITIES: Record<string, string> = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
 }
 
+/**
+ * Pulls an AI Mode answer out of its markup.
+ *
+ * Both exports carry the same content: the JSON in `safeHtmlItem[0].html`, the
+ * HTML inline after the timestamp. Block-level tags become line breaks so a
+ * list does not collapse into one run-on sentence when the tags are stripped.
+ */
+export function extractAnswer(markup: string): {
+  answer?: string
+  citations?: string[]
+} {
+  if (!markup.trim()) return {}
+
+  const citations: string[] = []
+  for (const m of markup.matchAll(/href="([^"]+)"/g)) {
+    const url = decodeEntities(m[1])
+    if (/^https?:/i.test(url) && !citations.includes(url)) citations.push(url)
+  }
+
+  const answer = decodeEntities(
+    markup
+      .replace(/<(br|\/p|\/li|\/h[1-6]|\/div|\/pre)\b[^>]*>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+  )
+    .replace(/[^\S\n]+/g, ' ')
+    .replace(/\n{2,}/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+
+  return {
+    answer: answer || undefined,
+    citations: citations.length ? citations : undefined,
+  }
+}
+
 function decodeEntities(text: string): string {
   return text
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
@@ -216,11 +256,18 @@ export function parseTakeoutHtml(
   const blocks = html.split('outer-cell')
 
   for (const block of blocks) {
-    const cell = block.match(
-      /<div class="content-cell[^"]*mdl-typography--body-1"[^>]*>([\s\S]*?)<\/div>/
+    // Not a non-greedy match up to </div>: AI Mode answers contain their own
+    // <div> elements, so the first closing tag belongs to the answer rather
+    // than the cell, and stopping there truncates it. Run to the next sibling
+    // cell instead, or to the end of the block.
+    const open = block.match(
+      /<div class="content-cell[^"]*mdl-typography--body-1"[^>]*>/
     )
-    if (!cell) continue
-    const body = cell[1]
+    if (!open) continue
+    const from = open.index! + open[0].length
+    const rest = block.slice(from)
+    const nextCell = rest.search(/<div class="content-cell/)
+    const body = nextCell === -1 ? rest : rest.slice(0, nextCell)
 
     // Two shapes, and only one of them has a link:
     //   Visited      <a href="url">title</a><br>timestamp<br>
@@ -236,12 +283,25 @@ export function parseTakeoutHtml(
     // carry an extra descriptive line first ("Including topics: ..."), so take
     // the first segment that actually parses as a date rather than assuming a
     // position. Assuming cost 20 records in a real archive.
+    // AI Mode puts the generated answer inline, after the timestamp:
+    //   Searched for <a>query</a><br>timestamp<br><p>answer...</p>
+    // So track where the date actually landed rather than assuming a position,
+    // and treat whatever follows it as the answer. Empty for every other
+    // product.
     let timestamp: string | null = null
-    for (const segment of tail.split(/<br\s*\/?>/i)) {
+    let answerMarkup = ''
+    const segments = tail.split(/(<br\s*\/?>)/i)
+    let consumed = 0
+    for (const segment of segments) {
+      consumed += segment.length
       const plain = decodeEntities(segment.replace(/<[^>]+>/g, '')).trim()
       if (!plain) continue
-      timestamp = parseActivityTime(plain)
-      if (timestamp) break
+      const parsed = parseActivityTime(plain)
+      if (parsed) {
+        timestamp = parsed
+        answerMarkup = tail.slice(consumed)
+        break
+      }
     }
     if (!timestamp) continue
 
@@ -279,6 +339,7 @@ export function parseTakeoutHtml(
       action: classifyAction(phrase || text),
       actionPhrase: phrase || undefined,
       url,
+      ...extractAnswer(answerMarkup),
     })
   }
 
