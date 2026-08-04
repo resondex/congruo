@@ -14,12 +14,14 @@ let cached: SupabaseClient | null = null
 export function supabaseAdmin(): SupabaseClient {
   if (cached) return cached
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  // Deliberately not NEXT_PUBLIC_. Nothing in the browser talks to Supabase,
+  // and a NEXT_PUBLIC_ name would imply a client that does not exist.
+  const url = process.env.SUPABASE_URL
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!url || !key) {
     throw new Error(
-      'Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+      'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
     )
   }
 
@@ -35,7 +37,6 @@ export function supabaseAdmin(): SupabaseClient {
  */
 export function supabaseConfigured(): boolean {
   return Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-      process.env.SUPABASE_SERVICE_ROLE_KEY
+    process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
   )
 }
