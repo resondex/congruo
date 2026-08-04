@@ -1,6 +1,3 @@
-'use client'
-
-import { useState } from 'react'
 import ReviewAndRelease from '@/components/ReviewAndRelease'
 
 /**
@@ -9,14 +6,9 @@ import ReviewAndRelease from '@/components/ReviewAndRelease'
  * the reconcile module.
  */
 export default function ReviewPage() {
-  const [sessionId] = useState(() => crypto.randomUUID())
-
   return (
     <main className="mx-auto max-w-3xl px-6 py-16">
-      <ReviewAndRelease
-        sessionId={sessionId}
-        studySlug={process.env.NEXT_PUBLIC_STUDY_ID ?? 'dev'}
-      />
+      <ReviewAndRelease studySlug={process.env.NEXT_PUBLIC_STUDY_ID ?? 'dev'} />
     </main>
   )
 }

@@ -27,7 +27,6 @@ export interface ReturnTargets {
 }
 
 interface Props {
-  sessionId: string
   studySlug: string
   respondentId?: string
   window?: { from?: Date; to?: Date }
@@ -52,7 +51,6 @@ function formatDate(iso: string) {
 }
 
 export default function ReviewAndRelease({
-  sessionId,
   studySlug,
   respondentId,
   window: studyWindow,

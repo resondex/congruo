@@ -30,8 +30,6 @@ export default async function CaptureReleasePage({
   return (
     <main className="mx-auto max-w-3xl px-6 py-16">
       <ReviewAndRelease
-        // TODO: replace with the persisted session id once Supabase is wired.
-        sessionId={`${study.slug}:${respondentId}`}
         studySlug={study.slug}
         respondentId={respondentId}
         window={{
