@@ -17,11 +17,15 @@ export function supabaseAdmin(): SupabaseClient {
   // Deliberately not NEXT_PUBLIC_. Nothing in the browser talks to Supabase,
   // and a NEXT_PUBLIC_ name would imply a client that does not exist.
   const url = process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  // Supabase is retiring the service_role JWT in favour of sb_secret_ keys.
+  // Both authorize through the same service_role Postgres role, so either
+  // works and the grants migration is correct for both.
+  const key =
+    process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY
 
   if (!url || !key) {
     throw new Error(
-      'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
+      'Supabase is not configured. Set SUPABASE_URL and SUPABASE_SECRET_KEY.'
     )
   }
 
@@ -37,6 +41,8 @@ export function supabaseAdmin(): SupabaseClient {
  */
 export function supabaseConfigured(): boolean {
   return Boolean(
-    process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+    process.env.SUPABASE_URL &&
+      (process.env.SUPABASE_SECRET_KEY ||
+        process.env.SUPABASE_SERVICE_ROLE_KEY)
   )
 }
