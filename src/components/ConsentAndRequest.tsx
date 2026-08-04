@@ -33,20 +33,24 @@ const EXPORT_URLS: Record<SourceKind, string> = {
 }
 
 /**
- * Steps, not prose. Takeout in particular defaults to every Google product,
- * and two of its entries are easy to confuse: "My Activity" is what we read,
- * while "Access log activity" is account security data - IP addresses, devices,
- * sign-in times. We never read it and nobody should be downloading it for us.
+ * Two steps, and deliberately no more.
  *
- * Narrowing inside My Activity matters too. We only ever parse Search and
- * Gemini, so anything else in there is downloaded and never used.
+ * Takeout has no URL parameter for the export format, so asking for JSON meant
+ * a manual dropdown that most respondents would miss - and missing it used to
+ * mean we read nothing at all. The HTML parser now handles Takeout's default
+ * completely, so the step is gone. Every instruction we delete is a place the
+ * flow stops failing.
+ *
+ * We also no longer ask them to narrow the product list. Anything we do not
+ * read is discarded during parsing and never reaches the review screen, so
+ * narrowing only shrinks their download - not worth the most error-prone tap
+ * on a phone. The deep link already prevents the one genuinely harmful
+ * mis-tick, "Access log activity", by never selecting it.
  */
 const REQUEST_HINTS: Partial<Record<SourceKind, string[]>> = {
   google_search: [
-    'My Activity is already selected for you. Leave the rest alone.',
-    'Tap "All activity data included" and turn everything off except Search and Gemini.',
-    'Change the format from HTML to JSON.',
-    'Scroll down and press "Next step", then "Create export".',
+    'My Activity is already selected for you. Leave everything else alone.',
+    'Scroll down, press "Next step", then "Create export".',
   ],
   gemini: ['Comes in the same Google export as your search history.'],
   chatgpt: [

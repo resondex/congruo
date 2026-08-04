@@ -17,9 +17,10 @@
  *     "products": ["Search"]
  *   }
  *
- * Takeout also offers an HTML export. We deliberately only accept JSON; the
- * request step tells respondents to choose JSON, and unrecognised files are
- * reported rather than silently skipped.
+ * HTML is Takeout's default and there is no URL parameter to change it, so
+ * HTML is the path most respondents take, not a fallback. Both formats parse
+ * to the same records; unrecognised files are reported rather than silently
+ * skipped.
  */
 
 import {
@@ -211,33 +212,65 @@ export function parseTakeoutHtml(
     if (!cell) continue
     const body = cell[1]
 
+    // Two shapes, and only one of them has a link:
+    //   Visited      <a href="url">title</a><br>timestamp<br>
+    //   Searched for query<br>timestamp<br>
+    // Hotels is almost entirely the second kind, so requiring an anchor
+    // silently discarded every search in that folder.
+    const breakAt = body.search(/<br\s*\/?>/i)
+    if (breakAt === -1) continue
+    const head = body.slice(0, breakAt)
+    const tail = body.slice(breakAt)
+
+    // Most blocks put the date immediately after the first break, but some
+    // carry an extra descriptive line first ("Including topics: ..."), so take
+    // the first segment that actually parses as a date rather than assuming a
+    // position. Assuming cost 20 records in a real archive.
+    let timestamp: string | null = null
+    for (const segment of tail.split(/<br\s*\/?>/i)) {
+      const plain = decodeEntities(segment.replace(/<[^>]+>/g, '')).trim()
+      if (!plain) continue
+      timestamp = parseActivityTime(plain)
+      if (timestamp) break
+    }
+    if (!timestamp) continue
+
+    const anchor = head.match(/<a\b[^>]*>([\s\S]*?)<\/a>/)
+
+    let phrase: string
+    let text: string
+    let url: string | undefined
+
+    if (anchor) {
+      phrase = decodeEntities(head.slice(0, anchor.index!).replace(/<[^>]+>/g, ''))
+        .replace(/\s+/g, ' ')
+        .trim()
+      text = decodeEntities(anchor[1].replace(/<[^>]+>/g, '')).trim()
+      url = anchor[0].match(/href="([^"]*)"/)?.[1]
+    } else {
+      // Verb and subject are one run of text; split on the verb rather than
+      // by length, which would truncate a long query.
+      const plain = decodeEntities(head.replace(/<[^>]+>/g, ''))
+        .replace(/\s+/g, ' ')
+        .trim()
+      const split = splitTitle(plain)
+      phrase = split.phrase
+      text = split.text
+    }
+
+    if (!text) continue
+
     // Every action is extracted and tagged. Which ones a study keeps is
     // policy, applied later - "Watched" is noise for a search study and the
     // entire signal for a media one.
-    const phrase = decodeEntities(
-      (body.match(/^\s*([^<]{1,40})</)?.[1] ?? '').replace(/\s+/g, ' ')
-    ).trim()
-
-    const anchor = body.match(/<a\b[^>]*>([\s\S]*?)<\/a>/)
-    if (!anchor) continue
-    const text = decodeEntities(anchor[1].replace(/<[^>]+>/g, '')).trim()
-    if (!text) continue
-
-    // The timestamp is the text node between the anchor and the next break.
-    const after = body.slice(anchor.index! + anchor[0].length)
-    const stamp = after.match(/<br\s*\/?>([^<]+)/)
-    if (!stamp) continue
-    const timestamp = parseActivityTime(decodeEntities(stamp[1]))
-    if (!timestamp) continue
-
     records.push({
       id: recordId(source, timestamp, text),
       source,
       timestamp,
       text,
-      action: classifyAction(phrase),
+      action: classifyAction(phrase || text),
       actionPhrase: phrase || undefined,
-      url: anchor[0].match(/href="([^"]*)"/)?.[1],
+      url,
     })
   }
 
