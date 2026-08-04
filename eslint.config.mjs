@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated esbuild bundle for `npm run inspect`; not source.
+    ".inspect/**",
   ]),
 ]);
 
