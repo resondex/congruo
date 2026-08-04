@@ -40,6 +40,10 @@ interface ReleasePayload {
 const SOURCES = new Set([
   'google_search',
   'google_ai_mode',
+  'google_image_search',
+  'google_video_search',
+  'google_hotels',
+  'google_shopping',
   'gemini',
   'chatgpt',
   'claude',

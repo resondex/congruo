@@ -22,6 +22,10 @@ const EXPORT_URLS: Record<SourceKind, string> = {
   // it is never selected to begin with.
   google_search: 'https://takeout.google.com/settings/takeout/custom/my_activity',
   google_ai_mode: 'https://takeout.google.com/settings/takeout/custom/my_activity',
+  google_image_search: 'https://takeout.google.com/settings/takeout/custom/my_activity',
+  google_video_search: 'https://takeout.google.com/settings/takeout/custom/my_activity',
+  google_hotels: 'https://takeout.google.com/settings/takeout/custom/my_activity',
+  google_shopping: 'https://takeout.google.com/settings/takeout/custom/my_activity',
   gemini: 'https://takeout.google.com/settings/takeout/custom/my_activity',
   chatgpt: 'https://chatgpt.com/#settings/DataControls',
   claude: 'https://claude.ai/settings/data-privacy-controls',

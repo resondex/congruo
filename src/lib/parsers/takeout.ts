@@ -22,7 +22,12 @@
  * reported rather than silently skipped.
  */
 
-import { ActivityRecord, SourceKind, recordId } from '../records'
+import {
+  ActivityRecord,
+  SourceKind,
+  classifyAction,
+  recordId,
+} from '../records'
 
 interface TakeoutEntry {
   header?: string
@@ -32,40 +37,29 @@ interface TakeoutEntry {
   products?: string[]
 }
 
-/** Localised Takeout uses different prefixes; strip whichever is present. */
-const SEARCH_PREFIXES = ['Searched for ', 'Searched ']
+/**
+ * Takeout writes the action into the title: "Searched for foo", "Visited bar",
+ * "Watched baz". We split the verb off the subject and keep both - no entry is
+ * discarded here, because deciding which actions matter is a study setting,
+ * not a parsing detail.
+ */
+const TITLE_VERBS = [
+  'Searched for ',
+  'Searched with ',
+  'Searched ',
+  'Visited ',
+  'Watched ',
+  'Viewed ',
+  'Used ',
+]
 
-function extractQuery(entry: TakeoutEntry): string | null {
-  const title = entry.title?.trim()
-  if (!title) return null
-
-  for (const prefix of SEARCH_PREFIXES) {
-    if (title.startsWith(prefix)) {
-      const query = title.slice(prefix.length).trim()
-      if (query) return query
+function splitTitle(title: string): { phrase: string; text: string } {
+  for (const verb of TITLE_VERBS) {
+    if (title.startsWith(verb)) {
+      return { phrase: verb.trim(), text: title.slice(verb.length).trim() }
     }
   }
-
-  // Fall back to the q= parameter, which survives title-format changes.
-  if (entry.titleUrl) {
-    try {
-      const q = new URL(entry.titleUrl).searchParams.get('q')
-      if (q?.trim()) return q.trim()
-    } catch {
-      // Malformed URL - fall through.
-    }
-  }
-
-  // "Visited <site>" and similar are navigation, not queries. Skip them.
-  return null
-}
-
-function extractPrompt(entry: TakeoutEntry): string | null {
-  const title = entry.title?.trim()
-  if (!title) return null
-  const prefix = 'Prompted '
-  const text = title.startsWith(prefix) ? title.slice(prefix.length) : title
-  return text.trim() || null
+  return { phrase: '', text: title.trim() }
 }
 
 export function parseTakeoutActivity(
@@ -89,10 +83,9 @@ export function parseTakeoutActivity(
     const timestamp = new Date(raw.time).toISOString()
     if (timestamp === 'Invalid Date') continue
 
-    const text =
-      source === 'google_search' || source === 'google_ai_mode'
-        ? extractQuery(raw)
-        : extractPrompt(raw)
+    const title = raw.title?.trim()
+    if (!title) continue
+    const { phrase, text } = splitTitle(title)
     if (!text) continue
 
     records.push({
@@ -100,6 +93,9 @@ export function parseTakeoutActivity(
       source,
       timestamp,
       text,
+      action: classifyAction(phrase || title),
+      actionPhrase: phrase || undefined,
+      url: raw.titleUrl,
     })
   }
 
@@ -113,14 +109,32 @@ export function parseTakeoutActivity(
  * is what most respondents will hand us however clearly the instructions ask
  * for JSON - and refusing it would cost them another export and another wait.
  */
+/**
+ * Folder name inside "My Activity" to the source it represents.
+ *
+ * Deliberately excluded, and worth keeping excluded:
+ *   Gmail   - searches inside a private mailbox, not public behaviour
+ *   Help    - Google support queries
+ *   Lens    - image queries, no usable text
+ *   Drive, Ads, Analytics, Developers, Discover, Takeout - not behaviour
+ */
+const FOLDER_SOURCES: [RegExp, SourceKind][] = [
+  [/\/image search\//, 'google_image_search'],
+  [/\/video search\//, 'google_video_search'],
+  [/\/ai[ _]mode\//, 'google_ai_mode'],
+  [/\/hotels\//, 'google_hotels'],
+  [/\/shopping\//, 'google_shopping'],
+  [/\/gemini[^/]*\//, 'gemini'],
+  // Last: "/search/" would otherwise swallow "/image search/".
+  [/\/search\//, 'google_search'],
+]
+
 export function takeoutSourceForPath(path: string): SourceKind | null {
   const lower = path.toLowerCase()
   if (!/myactivity\.(json|html)$/.test(lower)) return null
-  if (lower.includes('/search/')) return 'google_search'
-  if (lower.includes('/ai mode/') || lower.includes('/ai_mode/')) {
-    return 'google_ai_mode'
+  for (const [pattern, source] of FOLDER_SOURCES) {
+    if (pattern.test(lower)) return source
   }
-  if (lower.includes('/gemini')) return 'gemini'
   return null
 }
 
@@ -197,9 +211,12 @@ export function parseTakeoutHtml(
     if (!cell) continue
     const body = cell[1]
 
-    // "Visited", "Viewed" and "Used" are navigation and product events, not
-    // something the respondent typed.
-    if (!/^\s*Searched for\s*</.test(body)) continue
+    // Every action is extracted and tagged. Which ones a study keeps is
+    // policy, applied later - "Watched" is noise for a search study and the
+    // entire signal for a media one.
+    const phrase = decodeEntities(
+      (body.match(/^\s*([^<]{1,40})</)?.[1] ?? '').replace(/\s+/g, ' ')
+    ).trim()
 
     const anchor = body.match(/<a\b[^>]*>([\s\S]*?)<\/a>/)
     if (!anchor) continue
@@ -218,6 +235,9 @@ export function parseTakeoutHtml(
       source,
       timestamp,
       text,
+      action: classifyAction(phrase),
+      actionPhrase: phrase || undefined,
+      url: anchor[0].match(/href="([^"]*)"/)?.[1],
     })
   }
 

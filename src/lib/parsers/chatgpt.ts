@@ -80,6 +80,7 @@ export function parseChatGPTExport(json: string): ActivityRecord[] {
         source: 'chatgpt',
         timestamp,
         text,
+        action: 'searched',
         context: title,
       })
     }
