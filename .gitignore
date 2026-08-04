@@ -1,0 +1,48 @@
+# ---------------------------------------------------------------------------
+# Participant data. THIS BLOCK IS LOAD-BEARING.
+#
+# Anyone developing against this project will have real exports on disk:
+# their own Google Takeout archive, their own ChatGPT conversations.json.
+# Those files contain personal history and must never reach a public repo.
+# Keep test fixtures synthetic and put them in test/fixtures/ explicitly.
+# ---------------------------------------------------------------------------
+/archives/
+/exports/
+/participant-data/
+*.zip
+*.tgz
+conversations.json
+Takeout/
+takeout/
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*-service-account*.json
+client_secret*.json
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# Tooling
+coverage/
+.vercel
+.supabase/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
