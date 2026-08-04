@@ -15,6 +15,30 @@ makes donation-selection bias directly measurable. Most data-donation studies
 cannot do this and have to argue their way around it. Do not restructure the flow
 in a way that loses it.
 
+## Why append mode sends the respondent to us twice
+
+In full service the export builds while our survey runs. In append mode the
+interview is on someone else's platform, so a single hop would land the
+respondent on our review screen with nothing to do for the minutes or hours the
+archive takes. That is the highest-drop-off configuration available.
+
+Two hops fix it: consent and request at the top of their survey, review and
+release at the end. Their interview fills the wait instead of ours. Every
+enterprise survey platform can redirect from an arbitrary page, so this is
+scripting on their side rather than a platform limitation.
+
+Single-hop remains supported for clients who can only wire one redirect. Expect a
+materially worse release rate and quote it accordingly.
+
+### The status codes are load-bearing
+
+`declined` and `error` must never be collapsed. In full service we can measure
+donation-selection bias ourselves, because we hold survey data for people who do
+not release. In append mode the client holds that data, so the only way they can
+run the same check is if we tell them which respondents declined. Merging the two
+statuses removes a headline property of the product and nothing would fail
+visibly.
+
 ## Client-side parsing is a consent property, not a performance choice
 
 The raw archive must never reach the server. See the README for the practical

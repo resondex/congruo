@@ -24,6 +24,36 @@ the release, self-report stays uncontaminated by the record. And because survey
 data is retained for respondents who decline to release, donation-selection bias
 can be measured directly rather than estimated.
 
+## Two modes
+
+**Full service.** We run the whole thing: consent, request, survey, review,
+release, reconcile. Entry point is `/`.
+
+**Append.** The client runs the interview on their own survey platform and sends
+the respondent to us twice: once at the top to consent and start their exports
+building, and once at the end to review and release. We return them with a status
+each time. There is no reconcile step, because we never see their answers.
+
+```
+their survey starts
+  -> /capture/start   consent, fire the export requests
+  <- back to their survey, which fills the wait
+  -> /capture/release review, redact, release
+  <- back to their survey for the closing screen
+```
+
+Records are keyed to the referring platform's own respondent id, which is the
+only join key between our file and theirs. We hold nothing else identifying, so
+our data is inert to anyone who does not already have their survey file.
+
+The status we hand back is `complete`, `declined`, `partial`, or `error`.
+**`declined` must stay distinct from `error`**: in append mode the client holds
+the survey data, so telling them who chose not to release is the only way they
+can measure donation-selection bias on their own file.
+
+Return URLs arrive in the query string and are checked against a per-study host
+allowlist. They are never trusted as given.
+
 ## The constraint that shapes the codebase
 
 **Archives are parsed and redacted client-side. The raw archive never touches the
