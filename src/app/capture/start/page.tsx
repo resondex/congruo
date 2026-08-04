@@ -29,6 +29,8 @@ export default async function CaptureStartPage({
   return (
     <main className="mx-auto max-w-2xl px-6 py-16">
       <CaptureStart
+        studySlug={study.slug}
+        respondentId={respondentId || undefined}
         sources={study.sources}
         disclosureVersion={
           process.env.NEXT_PUBLIC_DISCLOSURE_VERSION ?? 'unversioned'

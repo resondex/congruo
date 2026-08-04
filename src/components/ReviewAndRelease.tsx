@@ -122,8 +122,9 @@ export default function ReviewAndRelease({
       const response = await fetch('/api/release', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
+        // No session id: the server resolves the session from the study and
+        // respondent id, so a client cannot write into someone else's row.
         body: JSON.stringify({
-          sessionId,
           studySlug,
           respondentId,
           withheldCount,

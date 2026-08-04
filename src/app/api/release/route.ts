@@ -1,4 +1,7 @@
 import type { NextRequest } from 'next/server'
+import { getStudy } from '@/lib/studies'
+import { supabaseConfigured } from '@/lib/supabase/server'
+import { findOrCreateSession, persistRelease } from '@/lib/sessions'
 
 /**
  * Accepts records the respondent has released. Nothing else.
@@ -18,7 +21,6 @@ const MAX_RECORDS = 50_000
 const MAX_TEXT = 20_000
 
 interface ReleasePayload {
-  sessionId: string
   studySlug: string
   /**
    * The referring platform's own id in append mode. It is the only join key
@@ -47,14 +49,13 @@ function validate(body: unknown): ReleasePayload | { error: string } {
   if (typeof body !== 'object' || body === null) {
     return { error: 'Expected an object.' }
   }
-  const { sessionId, studySlug, respondentId, records, withheldCount } =
-    body as Record<string, unknown>
+  const { studySlug, respondentId, records, withheldCount } = body as Record<
+    string,
+    unknown
+  >
 
-  if (typeof sessionId !== 'string' || !sessionId) {
-    return { error: 'sessionId is required.' }
-  }
-  if (typeof studySlug !== 'string' || !studySlug) {
-    return { error: 'studySlug is required.' }
+  if (typeof studySlug !== 'string' || !getStudy(studySlug)) {
+    return { error: 'Unknown study.' }
   }
   if (respondentId !== undefined && typeof respondentId !== 'string') {
     return { error: 'respondentId must be a string when present.' }
@@ -89,7 +90,6 @@ function validate(body: unknown): ReleasePayload | { error: string } {
   }
 
   return {
-    sessionId,
     studySlug,
     respondentId: respondentId as string | undefined,
     records: records as ReleasePayload['records'],
@@ -125,25 +125,40 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: result.error }, { status: 400 })
   }
 
-  // TODO: persist via Supabase service-role client once the schema is applied.
-  // Deliberately not wired up yet - see README status.
+  const timestamps = result.records.map((r) => r.timestamp).sort()
   const receipt = {
-    sessionId: result.sessionId,
-    studySlug: result.studySlug,
-    respondentId: result.respondentId ?? null,
     releasedCount: result.records.length,
     withheldCount: result.withheldCount,
     sources: [...new Set(result.records.map((r) => r.source))],
-    earliest: result.records.reduce<string | null>(
-      (min, r) => (min === null || r.timestamp < min ? r.timestamp : min),
-      null
-    ),
-    latest: result.records.reduce<string | null>(
-      (max, r) => (max === null || r.timestamp > max ? r.timestamp : max),
-      null
-    ),
-    receivedAt: new Date().toISOString(),
+    earliest: timestamps[0] ?? null,
+    latest: timestamps[timestamps.length - 1] ?? null,
   }
 
-  return Response.json({ receipt }, { status: 200 })
+  // Without credentials the route still validates and receipts, so the flow is
+  // demonstrable on a machine that has not been pointed at a database.
+  if (!supabaseConfigured()) {
+    return Response.json({ receipt, persisted: false }, { status: 200 })
+  }
+
+  try {
+    const session = await findOrCreateSession(
+      result.studySlug,
+      result.respondentId
+    )
+    const stored = await persistRelease({
+      sessionId: session.id,
+      records: result.records,
+      withheldCount: result.withheldCount,
+    })
+    return Response.json(
+      { receipt: stored, persisted: true, sessionId: session.id },
+      { status: 200 }
+    )
+  } catch (error) {
+    console.error('release failed', error)
+    return Response.json(
+      { error: 'Could not save your release. Nothing was stored.' },
+      { status: 500 }
+    )
+  }
 }
