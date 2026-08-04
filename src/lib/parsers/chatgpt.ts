@@ -15,7 +15,7 @@
  * gain.
  */
 
-import { ActivityRecord, recordId } from '../records'
+import { ActivityRecord, normaliseText, recordId } from '../records'
 
 interface ChatGPTNode {
   message?: {
@@ -67,7 +67,7 @@ export function parseChatGPTExport(json: string): ActivityRecord[] {
       const contentType = message.content?.content_type
       if (contentType && contentType !== 'text') continue
 
-      const text = textFromParts(message.content?.parts)
+      const text = normaliseText(textFromParts(message.content?.parts))
       if (!text) continue
 
       const seconds = message.create_time ?? conversation.create_time

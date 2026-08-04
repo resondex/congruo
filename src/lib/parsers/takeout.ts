@@ -27,6 +27,7 @@ import {
   ActivityRecord,
   SourceKind,
   classifyAction,
+  normaliseText,
   recordId,
 } from '../records'
 
@@ -43,13 +44,22 @@ interface TakeoutEntry {
  * "Watched baz". We split the verb off the subject and keep both - no entry is
  * discarded here, because deciding which actions matter is a study setting,
  * not a parsing detail.
+ *
+ * Longest first, and several of these are more than one word. Getting that
+ * wrong is silent: "Viewed image from X" against a one-word "Viewed " prefix
+ * leaves "image from X" as the subject, which differs from what the HTML
+ * export yields for the same event and quietly desynchronises the two formats.
  */
 const TITLE_VERBS = [
+  'Ran internet speed test',
+  'Viewed image from ',
   'Searched for ',
   'Searched with ',
-  'Searched ',
+  'Viewed job ',
   'Visited ',
+  'Searched ',
   'Watched ',
+  'Defined ',
   'Viewed ',
   'Used ',
 ]
@@ -84,7 +94,7 @@ export function parseTakeoutActivity(
     const timestamp = new Date(raw.time).toISOString()
     if (timestamp === 'Invalid Date') continue
 
-    const title = raw.title?.trim()
+    const title = normaliseText(raw.title ?? '')
     if (!title) continue
     const { phrase, text } = splitTitle(title)
     if (!text) continue
@@ -245,14 +255,12 @@ export function parseTakeoutHtml(
       phrase = decodeEntities(head.slice(0, anchor.index!).replace(/<[^>]+>/g, ''))
         .replace(/\s+/g, ' ')
         .trim()
-      text = decodeEntities(anchor[1].replace(/<[^>]+>/g, '')).trim()
+      text = normaliseText(decodeEntities(anchor[1].replace(/<[^>]+>/g, '')))
       url = anchor[0].match(/href="([^"]*)"/)?.[1]
     } else {
       // Verb and subject are one run of text; split on the verb rather than
       // by length, which would truncate a long query.
-      const plain = decodeEntities(head.replace(/<[^>]+>/g, ''))
-        .replace(/\s+/g, ' ')
-        .trim()
+      const plain = normaliseText(decodeEntities(head.replace(/<[^>]+>/g, '')))
       const split = splitTitle(plain)
       phrase = split.phrase
       text = split.text
