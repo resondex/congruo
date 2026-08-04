@@ -23,11 +23,27 @@ const EXPORT_URLS: Record<SourceKind, string> = {
   perplexity: 'https://www.perplexity.ai/settings/account',
 }
 
-const REQUEST_HINTS: Partial<Record<SourceKind, string>> = {
-  google_search:
-    'Choose "Deselect all", tick only My Activity, and set the format to JSON.',
-  gemini: 'Included in the same Google export as your search history.',
-  chatgpt: 'Settings, then Data controls, then Export data.',
+/**
+ * Steps, not prose. Takeout in particular defaults to every Google product,
+ * and two of its entries are easy to confuse: "My Activity" is what we read,
+ * while "Access log activity" is account security data - IP addresses, devices,
+ * sign-in times. We never read it and nobody should be downloading it for us.
+ *
+ * Narrowing inside My Activity matters too. We only ever parse Search and
+ * Gemini, so anything else in there is downloaded and never used.
+ */
+const REQUEST_HINTS: Partial<Record<SourceKind, string[]>> = {
+  google_search: [
+    'Press "Deselect all" at the top.',
+    'Tick "My Activity" only. Leave "Access log activity" unticked - that is sign-in and device data, and we do not read it.',
+    'Open "All activity data included" and deselect everything except Search and Gemini.',
+    'Set the format to JSON, not HTML.',
+  ],
+  gemini: ['Comes in the same Google export as your search history.'],
+  chatgpt: [
+    'Settings, then Data controls, then Export data.',
+    'OpenAI will email you a link. The file you want is the .zip it gives you.',
+  ],
 }
 
 interface Props {
@@ -112,29 +128,33 @@ export default function ConsentAndRequest({
             Each of these takes a few minutes to prepare, so start them now and
             carry on with the questions while they run.
           </p>
-          <ul className="mt-4 space-y-3">
+          <ul className="mt-4 space-y-5">
             {[...granted].map((source) => (
-              <li key={source} className="flex flex-wrap items-center gap-3">
-                <a
-                  href={EXPORT_URLS[source]}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() =>
-                    setRequested((prev) => new Set(prev).add(source))
-                  }
-                  className="rounded-md bg-neutral-900 px-3.5 py-2 text-sm font-medium text-white"
-                >
-                  Request {SOURCE_LABELS[source]}
-                </a>
+              <li key={source}>
+                <div className="flex flex-wrap items-center gap-3">
+                  <a
+                    href={EXPORT_URLS[source]}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() =>
+                      setRequested((prev) => new Set(prev).add(source))
+                    }
+                    className="rounded-md bg-neutral-900 px-3.5 py-2 text-sm font-medium text-white"
+                  >
+                    Request {SOURCE_LABELS[source]}
+                  </a>
+                  {requested.has(source) && (
+                    <span className="text-xs font-medium text-green-700">
+                      Started
+                    </span>
+                  )}
+                </div>
                 {REQUEST_HINTS[source] && (
-                  <span className="text-xs text-neutral-500">
-                    {REQUEST_HINTS[source]}
-                  </span>
-                )}
-                {requested.has(source) && (
-                  <span className="text-xs font-medium text-green-700">
-                    Started
-                  </span>
+                  <ol className="mt-2 ml-1 list-inside list-decimal space-y-1 text-xs leading-relaxed text-neutral-600">
+                    {REQUEST_HINTS[source].map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
                 )}
               </li>
             ))}
