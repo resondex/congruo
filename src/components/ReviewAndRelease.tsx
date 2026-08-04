@@ -105,11 +105,33 @@ export default function ReviewAndRelease({
         : prev
     )
 
-  function decline() {
-    // A respondent who gets this far and says no is a valid, retained outcome,
-    // not a failure. The referring platform is told `declined` so the client
-    // can still measure who chose not to share.
-    if (returnTo) window.location.href = returnTo.declined
+  /**
+   * A respondent who gets this far and says no is a valid, retained outcome,
+   * not a failure. Record it before redirecting: a decline that only exists as
+   * a redirect is invisible to us, and these sessions are the comparison group
+   * that makes donation-selection bias measurable.
+   */
+  async function decline() {
+    setBusy(true)
+    try {
+      await fetch('/api/release', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          studySlug,
+          respondentId,
+          withheldCount: records?.length ?? 0,
+          records: [],
+        }),
+      })
+    } catch {
+      // Redirect regardless. Trapping someone on our screen because our own
+      // write failed is the worse outcome; the referring platform still gets
+      // `declined` in the return status.
+    } finally {
+      setBusy(false)
+      if (returnTo) window.location.href = returnTo.declined
+    }
   }
 
   async function release() {
@@ -314,7 +336,7 @@ export default function ReviewAndRelease({
             {returnTo && (
               <button
                 type="button"
-                onClick={decline}
+                onClick={() => void decline()}
                 className="text-sm text-neutral-500 underline hover:text-neutral-900"
               >
                 I would rather not share this

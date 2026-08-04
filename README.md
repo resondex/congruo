@@ -93,7 +93,10 @@ uses assisted export throughout.
 
 ## Stack
 
-Next.js (App Router) · Supabase · Vercel
+Next.js (App Router) · Postgres on Supabase · Vercel
+
+We connect straight to Postgres rather than through the Supabase Data API; see
+`docs/architecture.md` for why. Apply migrations with `npm run migrate`.
 
 ## Development
 

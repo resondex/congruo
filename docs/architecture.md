@@ -39,6 +39,22 @@ run the same check is if we tell them which respondents declined. Merging the tw
 statuses removes a headline property of the product and nothing would fail
 visibly.
 
+## Why we connect to Postgres directly rather than through the Data API
+
+Supabase's Data API exists so browsers can query the database with RLS scoping
+what they see. This app has no browser client, no auth, no realtime and no RLS
+policies: every read and write is a server-side query from a route handler.
+
+Carrying PostgREST anyway cost us a layer of configuration we got nothing from -
+exposed schemas, schema-cache reloads, and grants to API roles - and every fix
+for those makes the database *more* reachable, which is backwards for a store of
+people's search history. Connecting directly lets the Data API stay switched off.
+
+RLS stays enabled with no policies as a backstop, and `0003_grants.sql` grants
+only `service_role` while explicitly revoking `anon` and `authenticated`. Those
+are now belt and braces rather than the actual control, which is that nothing
+outside a route handler holds a credential.
+
 ## Client-side parsing is a consent property, not a performance choice
 
 The raw archive must never reach the server. See the README for the practical

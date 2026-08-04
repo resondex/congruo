@@ -1,5 +1,5 @@
 import 'server-only'
-import { supabaseAdmin } from './supabase/server'
+import { db } from './db'
 import type { SourceKind } from './records'
 
 /**
@@ -25,31 +25,25 @@ export async function findOrCreateSession(
   studySlug: string,
   externalRespondentId?: string
 ): Promise<SessionRow> {
-  const db = supabaseAdmin()
+  const sql = db()
 
   if (externalRespondentId) {
-    const { data: existing, error } = await db
-      .from('sessions')
-      .select('id, study_slug, external_respondent_id')
-      .eq('study_slug', studySlug)
-      .eq('external_respondent_id', externalRespondentId)
-      .maybeSingle()
-
-    if (error) throw new Error(`Session lookup failed: ${error.message}`)
-    if (existing) return existing as SessionRow
+    const existing = await sql<SessionRow[]>`
+      select id, study_slug, external_respondent_id
+      from sessions
+      where study_slug = ${studySlug}
+        and external_respondent_id = ${externalRespondentId}
+      limit 1
+    `
+    if (existing.length) return existing[0]
   }
 
-  const { data, error } = await db
-    .from('sessions')
-    .insert({
-      study_slug: studySlug,
-      external_respondent_id: externalRespondentId ?? null,
-    })
-    .select('id, study_slug, external_respondent_id')
-    .single()
-
-  if (error) throw new Error(`Session create failed: ${error.message}`)
-  return data as SessionRow
+  const created = await sql<SessionRow[]>`
+    insert into sessions (study_slug, external_respondent_id)
+    values (${studySlug}, ${externalRespondentId ?? null})
+    returning id, study_slug, external_respondent_id
+  `
+  return created[0]
 }
 
 export interface ConsentGrant {
@@ -69,9 +63,9 @@ export async function recordConsent(
 ): Promise<void> {
   if (!grants.length) return
 
-  const { error } = await supabaseAdmin()
-    .from('consent_grants')
-    .insert(
+  const sql = db()
+  await sql`
+    insert into consent_grants ${sql(
       grants.map((g) => ({
         session_id: sessionId,
         source: g.source,
@@ -79,9 +73,8 @@ export async function recordConsent(
         disclosure_version: disclosureVersion,
         comprehension_passed: comprehensionPassed,
       }))
-    )
-
-  if (error) throw new Error(`Consent write failed: ${error.message}`)
+    )}
+  `
 }
 
 export interface ReleaseInput {
@@ -106,7 +99,7 @@ export interface ReleaseReceipt {
 export async function persistRelease(
   input: ReleaseInput
 ): Promise<ReleaseReceipt> {
-  const db = supabaseAdmin()
+  const sql = db()
 
   const sources = [...new Set(input.records.map((r) => r.source))]
   const timestamps = input.records.map((r) => r.timestamp).sort()
@@ -118,56 +111,42 @@ export async function persistRelease(
     latest: timestamps[timestamps.length - 1] ?? null,
   }
 
-  if (input.records.length) {
-    // Chunked so a large archive does not hit the request size limit.
-    const CHUNK = 500
-    for (let i = 0; i < input.records.length; i += CHUNK) {
-      const { error } = await db.from('released_records').insert(
-        input.records.slice(i, i + CHUNK).map((r) => ({
+  // One transaction: either the records, the receipt, and the session stamp
+  // all land, or none do. A half-written release would misreport to the
+  // respondent what we hold.
+  await sql.begin(async (tx) => {
+    if (input.records.length) {
+      const CHUNK = 500
+      for (let i = 0; i < input.records.length; i += CHUNK) {
+        const rows = input.records.slice(i, i + CHUNK).map((r) => ({
           session_id: input.sessionId,
           source: r.source,
           occurred_at: r.timestamp,
           text: r.text,
           context: r.context ?? null,
         }))
-      )
-      if (error) throw new Error(`Record write failed: ${error.message}`)
+        await tx`insert into released_records ${tx(rows)}`
+      }
     }
-  }
 
-  const { error: receiptError } = await db.from('release_receipts').insert({
-    session_id: input.sessionId,
-    released_count: receipt.releasedCount,
-    withheld_count: receipt.withheldCount,
-    sources: receipt.sources,
-    earliest: receipt.earliest,
-    latest: receipt.latest,
+    await tx`
+      insert into release_receipts
+        (session_id, released_count, withheld_count, sources, earliest, latest)
+      values (
+        ${input.sessionId}, ${receipt.releasedCount}, ${receipt.withheldCount},
+        ${receipt.sources}, ${receipt.earliest}, ${receipt.latest}
+      )
+    `
+
+    // A release of zero records is a decline, not a completion: the respondent
+    // reached the review step and chose to share nothing. Marking it as such is
+    // what keeps donation-selection bias measurable.
+    if (receipt.releasedCount > 0) {
+      await tx`update sessions set released_at = now() where id = ${input.sessionId}`
+    } else {
+      await tx`update sessions set declined_at = now() where id = ${input.sessionId}`
+    }
   })
-  if (receiptError) {
-    throw new Error(`Receipt write failed: ${receiptError.message}`)
-  }
-
-  // A release of zero records is a decline, not a completion: the respondent
-  // reached the review step and chose to share nothing. Marking it as such is
-  // what keeps donation-selection bias measurable.
-  const stamp = new Date().toISOString()
-  const { error: sessionError } = await db
-    .from('sessions')
-    .update(
-      receipt.releasedCount > 0 ? { released_at: stamp } : { declined_at: stamp }
-    )
-    .eq('id', input.sessionId)
-  if (sessionError) {
-    throw new Error(`Session update failed: ${sessionError.message}`)
-  }
 
   return receipt
-}
-
-export async function markDeclined(sessionId: string): Promise<void> {
-  const { error } = await supabaseAdmin()
-    .from('sessions')
-    .update({ declined_at: new Date().toISOString() })
-    .eq('id', sessionId)
-  if (error) throw new Error(`Decline write failed: ${error.message}`)
 }

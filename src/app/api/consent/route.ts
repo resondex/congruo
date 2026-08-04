@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { getStudy } from '@/lib/studies'
-import { supabaseConfigured } from '@/lib/supabase/server'
+import { dbConfigured } from '@/lib/db'
 import { findOrCreateSession, recordConsent } from '@/lib/sessions'
 
 /**
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   const { studySlug, respondentId, grants, disclosureVersion, comprehensionPassed } =
     (body ?? {}) as Record<string, unknown>
 
-  if (typeof studySlug !== 'string' || !getStudy(studySlug)) {
+  if (typeof studySlug !== 'string' || !(await getStudy(studySlug))) {
     return Response.json({ error: 'Unknown study.' }, { status: 400 })
   }
   if (respondentId !== undefined && typeof respondentId !== 'string') {
@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
     parsed.push({ source, granted })
   }
 
-  if (!supabaseConfigured()) {
+  if (!dbConfigured()) {
     return Response.json({ recorded: false }, { status: 200 })
   }
 

@@ -6,7 +6,9 @@
  * sent afterwards.
  */
 
+import 'server-only'
 import type { SourceKind } from './records'
+import { db, dbConfigured } from './db'
 
 export type CaptureMode = 'full_service' | 'append'
 
@@ -44,11 +46,12 @@ export interface Study {
 }
 
 /**
- * TODO: move to the `studies` table once Supabase is wired. Keeping the
- * allowlist in code means a client's return URL cannot be changed without a
- * deploy, which is the wrong trade long term but the safe one today.
+ * Fallback registry, used only when no database is configured so the app is
+ * still demonstrable on a fresh checkout. With Supabase present, the `studies`
+ * table is the single source of truth - a return-host allowlist that needed a
+ * deploy to change would be the wrong shape for a fielding tool.
  */
-const STUDIES: Record<string, Study> = {
+const FALLBACK_STUDIES: Record<string, Study> = {
   dev: {
     slug: 'dev',
     name: 'Development study',
@@ -60,9 +63,56 @@ const STUDIES: Record<string, Study> = {
   },
 }
 
-export function getStudy(slug: string | undefined): Study | null {
+interface StudyRow {
+  slug: string
+  name: string
+  mode: CaptureMode
+  sources: string[]
+  return_hosts: string[]
+  default_return_url: string | null
+  respondent_param: string
+  status_param: string
+  window_from: string | null
+  window_to: string | null
+}
+
+function fromRow(row: StudyRow): Study {
+  return {
+    slug: row.slug,
+    name: row.name,
+    mode: row.mode,
+    sources: row.sources as SourceKind[],
+    returnHosts: row.return_hosts ?? [],
+    defaultReturnUrl: row.default_return_url ?? undefined,
+    respondentParam: row.respondent_param,
+    statusParam: row.status_param,
+    window:
+      row.window_from || row.window_to
+        ? {
+            from: row.window_from ?? undefined,
+            to: row.window_to ?? undefined,
+          }
+        : undefined,
+  }
+}
+
+export async function getStudy(
+  slug: string | undefined
+): Promise<Study | null> {
   if (!slug) return null
-  return STUDIES[slug] ?? null
+
+  if (!dbConfigured()) {
+    return FALLBACK_STUDIES[slug] ?? null
+  }
+
+  const rows = await db()<StudyRow[]>`
+    select slug, name, mode, sources, return_hosts, default_return_url,
+           respondent_param, status_param, window_from, window_to
+    from studies
+    where slug = ${slug}
+    limit 1
+  `
+  return rows.length ? fromRow(rows[0]) : null
 }
 
 /** Exact host match. Subdomain wildcards are deliberately not supported. */
@@ -117,13 +167,13 @@ export interface CaptureParams {
  * respondent id is required, because without it the records we collect cannot
  * be joined to anything and the fielding is worthless.
  */
-export function readCaptureParams(
+export async function readCaptureParams(
   search: Record<string, string | string[] | undefined>
-): CaptureParams | { error: string } {
+): Promise<CaptureParams | { error: string }> {
   const first = (v: string | string[] | undefined) =>
     Array.isArray(v) ? v[0] : v
 
-  const study = getStudy(first(search.study))
+  const study = await getStudy(first(search.study))
   if (!study) return { error: 'Unknown study.' }
 
   const respondentId = first(search.rid)?.trim()

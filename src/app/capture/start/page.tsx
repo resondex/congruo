@@ -13,7 +13,7 @@ export default async function CaptureStartPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  const params = readCaptureParams(await searchParams)
+  const params = await readCaptureParams(await searchParams)
 
   if ('error' in params) {
     return (

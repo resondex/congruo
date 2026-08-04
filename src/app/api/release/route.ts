@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server'
 import { getStudy } from '@/lib/studies'
-import { supabaseConfigured } from '@/lib/supabase/server'
+import { dbConfigured } from '@/lib/db'
 import { findOrCreateSession, persistRelease } from '@/lib/sessions'
 
 /**
@@ -54,8 +54,8 @@ function validate(body: unknown): ReleasePayload | { error: string } {
     unknown
   >
 
-  if (typeof studySlug !== 'string' || !getStudy(studySlug)) {
-    return { error: 'Unknown study.' }
+  if (typeof studySlug !== 'string' || !studySlug) {
+    return { error: 'studySlug is required.' }
   }
   if (respondentId !== undefined && typeof respondentId !== 'string') {
     return { error: 'respondentId must be a string when present.' }
@@ -125,6 +125,10 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: result.error }, { status: 400 })
   }
 
+  if (!(await getStudy(result.studySlug))) {
+    return Response.json({ error: 'Unknown study.' }, { status: 400 })
+  }
+
   const timestamps = result.records.map((r) => r.timestamp).sort()
   const receipt = {
     releasedCount: result.records.length,
@@ -136,7 +140,7 @@ export async function POST(request: NextRequest) {
 
   // Without credentials the route still validates and receipts, so the flow is
   // demonstrable on a machine that has not been pointed at a database.
-  if (!supabaseConfigured()) {
+  if (!dbConfigured()) {
     return Response.json({ receipt, persisted: false }, { status: 200 })
   }
 
