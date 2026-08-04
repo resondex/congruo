@@ -237,7 +237,11 @@ export default function StudyFlow({
       <p className="mb-8 text-sm text-neutral-500">
         {studyName} · step 3 of 3
       </p>
-      <ReviewAndRelease studySlug={studySlug} window={studyWindow} />
+      <ReviewAndRelease
+        studySlug={studySlug}
+        window={studyWindow}
+        allowedSources={sources}
+      />
     </>
   )
 }

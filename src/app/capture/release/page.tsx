@@ -31,6 +31,7 @@ export default async function CaptureReleasePage({
     <main className="mx-auto max-w-3xl px-6 py-16">
       <ReviewAndRelease
         studySlug={study.slug}
+        allowedSources={study.sources}
         respondentId={respondentId}
         window={{
           from: study.window?.from ? new Date(study.window.from) : undefined,

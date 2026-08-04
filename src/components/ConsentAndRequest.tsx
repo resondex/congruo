@@ -21,6 +21,7 @@ const EXPORT_URLS: Record<SourceKind, string> = {
   // usefully, removes any chance of ticking "Access log activity" by mistake -
   // it is never selected to begin with.
   google_search: 'https://takeout.google.com/settings/takeout/custom/my_activity',
+  google_ai_mode: 'https://takeout.google.com/settings/takeout/custom/my_activity',
   gemini: 'https://takeout.google.com/settings/takeout/custom/my_activity',
   chatgpt: 'https://chatgpt.com/#settings/DataControls',
   claude: 'https://claude.ai/settings/data-privacy-controls',

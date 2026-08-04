@@ -10,8 +10,13 @@
  */
 
 import { unzip, strFromU8 } from 'fflate'
-import { ActivityRecord, normalise } from '../records'
-import { parseTakeoutActivity, takeoutSourceForPath } from './takeout'
+import { ActivityRecord, normalise, type SourceKind } from '../records'
+import {
+  isHtmlActivity,
+  parseTakeoutActivity,
+  parseTakeoutHtml,
+  takeoutSourceForPath,
+} from './takeout'
 import { parseChatGPTExport } from './chatgpt'
 
 export interface IntakeReport {
@@ -34,7 +39,10 @@ function unzipAsync(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
 function parseMember(path: string, bytes: Uint8Array): ActivityRecord[] {
   const takeoutSource = takeoutSourceForPath(path)
   if (takeoutSource) {
-    return parseTakeoutActivity(strFromU8(bytes), takeoutSource)
+    const text = strFromU8(bytes)
+    return isHtmlActivity(path)
+      ? parseTakeoutHtml(text, takeoutSource)
+      : parseTakeoutActivity(text, takeoutSource)
   }
   if (path.toLowerCase().endsWith('conversations.json')) {
     return parseChatGPTExport(strFromU8(bytes))
@@ -44,14 +52,25 @@ function parseMember(path: string, bytes: Uint8Array): ActivityRecord[] {
 
 export async function readArchive(
   file: File,
-  window?: { from?: Date; to?: Date }
+  window?: { from?: Date; to?: Date },
+  /**
+   * Sources the respondent actually granted. A Takeout archive routinely
+   * contains a dozen products they never agreed to share, and anything outside
+   * this list is dropped here - before it reaches the review list, so it can
+   * never be released by an absent-minded "include all".
+   */
+  allowed?: SourceKind[]
 ): Promise<IntakeReport> {
+  const permitted = allowed ? new Set(allowed) : null
+  const keep = (records: ActivityRecord[]) =>
+    permitted ? records.filter((r) => permitted.has(r.source)) : records
+
   const bytes = new Uint8Array(await file.arrayBuffer())
   const report: IntakeReport = { records: [], read: [], empty: [] }
 
   // A bare conversations.json, not zipped. Common enough to support.
   if (file.name.toLowerCase().endsWith('.json')) {
-    const records = parseMember(file.name, bytes)
+    const records = keep(parseMember(file.name, bytes))
     if (records.length) {
       report.read.push(file.name)
     } else {
@@ -77,7 +96,7 @@ export async function readArchive(
   const all: ActivityRecord[] = []
   for (const [path, content] of Object.entries(members)) {
     if (!content.length) continue
-    const records = parseMember(path, content)
+    const records = keep(parseMember(path, content))
     if (!records.length) {
       if (takeoutSourceForPath(path) || path.endsWith('conversations.json')) {
         report.empty.push(path)

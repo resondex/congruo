@@ -30,6 +30,8 @@ interface Props {
   studySlug: string
   respondentId?: string
   window?: { from?: Date; to?: Date }
+  /** Sources the respondent granted; anything else is dropped at parse time. */
+  allowedSources?: SourceKind[]
   /** Absent in full-service mode, where we keep the respondent ourselves. */
   returnTo?: ReturnTargets
 }
@@ -54,6 +56,7 @@ export default function ReviewAndRelease({
   studySlug,
   respondentId,
   window: studyWindow,
+  allowedSources,
   returnTo,
 }: Props) {
   const [records, setRecords] = useState<ReviewedRecord[] | null>(null)
@@ -67,14 +70,14 @@ export default function ReviewAndRelease({
       setBusy(true)
       setError(null)
       try {
-        const result = await readArchive(file, studyWindow)
+        const result = await readArchive(file, studyWindow, allowedSources)
         setReport(result)
         setRecords(result.records.map((r) => ({ ...r, withheld: false })))
       } finally {
         setBusy(false)
       }
     },
-    [studyWindow]
+    [studyWindow, allowedSources]
   )
 
   const grouped = useMemo(() => {

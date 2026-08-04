@@ -13,6 +13,7 @@ import { findOrCreateSession, recordConsent } from '@/lib/sessions'
 
 const SOURCES = new Set([
   'google_search',
+  'google_ai_mode',
   'gemini',
   'chatgpt',
   'claude',
