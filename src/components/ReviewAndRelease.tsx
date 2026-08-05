@@ -5,7 +5,7 @@
  *
  * The respondent picks their export, it is parsed here in the browser, and
  * they decide item by item what we may keep. Only released records leave the
- * device. See CLAUDE.md invariant 1.
+ * device. See CLAUDE.md invariants 1 and 5.
  *
  * Used by both modes: on its own for a full-service study, and inside
  * /capture/release when the interview is running on someone else's platform.
@@ -39,6 +39,7 @@ interface Props {
 interface Receipt {
   releasedCount: number
   withheldCount: number
+  answerCount?: number
   sources: string[]
   earliest: string | null
   latest: string | null
@@ -50,6 +51,17 @@ function formatDate(iso: string) {
     month: 'short',
     day: 'numeric',
   })
+}
+
+const wordCount = (text: string) => text.split(/\s+/).filter(Boolean).length
+
+/** Cited URLs are long and noisy; the domain is what a reader can judge. */
+function domainOf(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return url
+  }
 }
 
 export default function ReviewAndRelease({
@@ -64,6 +76,7 @@ export default function ReviewAndRelease({
   const [busy, setBusy] = useState(false)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const onPick = useCallback(
     async (file: File) => {
@@ -72,7 +85,13 @@ export default function ReviewAndRelease({
       try {
         const result = await readArchive(file, studyWindow, allowedSources)
         setReport(result)
-        setRecords(result.records.map((r) => ({ ...r, withheld: false })))
+        setRecords(
+          result.records.map((r) => ({
+            ...r,
+            withheld: false,
+            withheldAnswer: false,
+          }))
+        )
       } finally {
         setBusy(false)
       }
@@ -91,13 +110,25 @@ export default function ReviewAndRelease({
     return [...bySource.entries()]
   }, [records])
 
-  const releasedCount = records?.filter((r) => !r.withheld).length ?? 0
-  const withheldCount = records?.filter((r) => r.withheld).length ?? 0
+  const kept = records?.filter((r) => !r.withheld) ?? []
+  const releasedCount = kept.length
+  const withheldCount = (records?.length ?? 0) - releasedCount
+  const answersKept = kept.filter((r) => r.answer && !r.withheldAnswer).length
+  const answersTotal = records?.filter((r) => r.answer).length ?? 0
 
   const toggle = (id: string) =>
     setRecords((prev) =>
       prev
         ? prev.map((r) => (r.id === id ? { ...r, withheld: !r.withheld } : r))
+        : prev
+    )
+
+  const toggleAnswer = (id: string) =>
+    setRecords((prev) =>
+      prev
+        ? prev.map((r) =>
+            r.id === id ? { ...r, withheldAnswer: !r.withheldAnswer } : r
+          )
         : prev
     )
 
@@ -107,6 +138,34 @@ export default function ReviewAndRelease({
         ? prev.map((r) => (r.source === source ? { ...r, withheld } : r))
         : prev
     )
+
+  const setAllAnswersWithheld = (withheld: boolean) =>
+    setRecords((prev) =>
+      prev
+        ? prev.map((r) => (r.answer ? { ...r, withheldAnswer: withheld } : r))
+        : prev
+    )
+
+  const toggleExpanded = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  /** Strips anything the respondent held back. Runs before the request body. */
+  const payloadFor = (list: ReviewedRecord[]) =>
+    list
+      .filter((r) => !r.withheld)
+      .map(({ source, timestamp, text, context, answer, citations, withheldAnswer }) => ({
+        source,
+        timestamp,
+        text,
+        context,
+        answer: withheldAnswer ? undefined : answer,
+        citations: withheldAnswer ? undefined : citations,
+      }))
 
   /**
    * A respondent who gets this far and says no is a valid, retained outcome,
@@ -151,14 +210,7 @@ export default function ReviewAndRelease({
           studySlug,
           respondentId,
           withheldCount,
-          records: records
-            .filter((r) => !r.withheld)
-            .map(({ source, timestamp, text, context }) => ({
-              source,
-              timestamp,
-              text,
-              context,
-            })),
+          records: payloadFor(records),
         }),
       })
       const data = await response.json()
@@ -193,6 +245,14 @@ export default function ReviewAndRelease({
             <dt className="text-neutral-600">Records you held back</dt>
             <dd className="font-medium tabular-nums">{receipt.withheldCount}</dd>
           </div>
+          {answersTotal > 0 && (
+            <div className="flex justify-between py-3">
+              <dt className="text-neutral-600">AI answers included</dt>
+              <dd className="font-medium tabular-nums">
+                {receipt.answerCount ?? answersKept} of {answersTotal}
+              </dd>
+            </div>
+          )}
           <div className="flex justify-between py-3">
             <dt className="text-neutral-600">Sources</dt>
             <dd className="font-medium">
@@ -263,6 +323,41 @@ export default function ReviewAndRelease({
             back <strong className="tabular-nums">{withheldCount}</strong>.
           </p>
 
+          {answersTotal > 0 && (
+            <div className="mt-6 rounded-lg border border-neutral-900 bg-white p-5">
+              <h2 className="font-medium">
+                {answersTotal} of these include what the AI told you
+              </h2>
+              <p className="mt-1 max-w-prose text-sm text-neutral-600">
+                These are the longest thing you would be sharing - full answers,
+                sometimes several hundred words. Open any of them below to read
+                what it says before you decide. You can share the question you
+                asked while holding back the answer.
+              </p>
+              <p className="mt-3 text-sm">
+                Currently sharing{' '}
+                <strong className="tabular-nums">{answersKept}</strong> of{' '}
+                <strong className="tabular-nums">{answersTotal}</strong> answers.
+              </p>
+              <div className="mt-3 flex gap-4 text-xs">
+                <button
+                  type="button"
+                  className="text-neutral-500 underline hover:text-neutral-900"
+                  onClick={() => setAllAnswersWithheld(true)}
+                >
+                  Hold back every answer
+                </button>
+                <button
+                  type="button"
+                  className="text-neutral-500 underline hover:text-neutral-900"
+                  onClick={() => setAllAnswersWithheld(false)}
+                >
+                  Include every answer
+                </button>
+              </div>
+            </div>
+          )}
+
           {grouped.map(([source, items]) => (
             <div key={source} className="mt-8">
               <div className="flex items-baseline justify-between border-b border-neutral-200 pb-2">
@@ -288,35 +383,102 @@ export default function ReviewAndRelease({
                 </div>
               </div>
               <ul className="divide-y divide-neutral-100">
-                {items.map((record) => (
-                  <li
-                    key={record.id}
-                    className="flex items-start gap-3 py-2.5 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={!record.withheld}
-                      onChange={() => toggle(record.id)}
-                      aria-label={`Include: ${record.text.slice(0, 60)}`}
-                    />
-                    <span className="flex-1">
-                      <span
-                        className={
-                          record.withheld
-                            ? 'text-neutral-400 line-through'
-                            : undefined
-                        }
-                      >
-                        {record.text}
-                      </span>
-                      <span className="mt-0.5 block text-xs text-neutral-400">
-                        {formatDate(record.timestamp)}
-                        {record.context ? ` · ${record.context}` : ''}
-                      </span>
-                    </span>
-                  </li>
-                ))}
+                {items.map((record) => {
+                  const isOpen = expanded.has(record.id)
+                  return (
+                    <li key={record.id} className="py-2.5 text-sm">
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          className="mt-1"
+                          checked={!record.withheld}
+                          onChange={() => toggle(record.id)}
+                          aria-label={`Include: ${record.text.slice(0, 60)}`}
+                        />
+                        <span className="flex-1">
+                          <span
+                            className={
+                              record.withheld
+                                ? 'text-neutral-400 line-through'
+                                : undefined
+                            }
+                          >
+                            {record.text}
+                          </span>
+                          <span className="mt-0.5 block text-xs text-neutral-400">
+                            {formatDate(record.timestamp)}
+                            {record.context ? ` · ${record.context}` : ''}
+                          </span>
+                        </span>
+                      </div>
+
+                      {record.answer && !record.withheld && (
+                        <div className="ml-7 mt-2 rounded-md border border-neutral-200 bg-neutral-50">
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
+                            <span className="text-xs font-medium text-neutral-700">
+                              The AI answered ·{' '}
+                              <span className="tabular-nums">
+                                {wordCount(record.answer)}
+                              </span>{' '}
+                              words
+                              {record.citations?.length
+                                ? ` · ${record.citations.length} source${
+                                    record.citations.length === 1 ? '' : 's'
+                                  }`
+                                : ''}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => toggleExpanded(record.id)}
+                              className="text-xs text-neutral-600 underline hover:text-neutral-900"
+                            >
+                              {isOpen ? 'Hide' : 'Read it'}
+                            </button>
+                            <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-neutral-700">
+                              <input
+                                type="checkbox"
+                                checked={!record.withheldAnswer}
+                                onChange={() => toggleAnswer(record.id)}
+                              />
+                              Share this answer
+                            </label>
+                          </div>
+
+                          {isOpen && (
+                            <div className="border-t border-neutral-200 px-3 py-3">
+                              {/*
+                                Expands in the page flow rather than inside its
+                                own scroll box. A nested scroller on a phone
+                                traps the page scroll and is where someone stops
+                                reading - which would defeat the reason the
+                                answer is shown at all. Collapsed by default is
+                                what keeps a long list manageable.
+                              */}
+                              <p className="whitespace-pre-wrap text-xs leading-relaxed text-neutral-700">
+                                {record.answer}
+                              </p>
+                              {record.citations?.length ? (
+                                <p className="mt-3 border-t border-neutral-200 pt-2 text-xs text-neutral-500">
+                                  Sources it cited:{' '}
+                                  {[
+                                    ...new Set(record.citations.map(domainOf)),
+                                  ].join(', ')}
+                                </p>
+                              ) : null}
+                            </div>
+                          )}
+
+                          {record.withheldAnswer && (
+                            <p className="border-t border-neutral-200 px-3 py-2 text-xs text-neutral-500">
+                              Held back. We will receive your question but not
+                              this answer.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           ))}
@@ -335,6 +497,7 @@ export default function ReviewAndRelease({
               className="rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white disabled:opacity-50"
             >
               Release {releasedCount} items
+              {answersTotal > 0 ? ` and ${answersKept} answers` : ''}
             </button>
             {returnTo && (
               <button

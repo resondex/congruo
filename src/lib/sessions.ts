@@ -84,6 +84,8 @@ export interface ReleaseInput {
     timestamp: string
     text: string
     context?: string
+    answer?: string
+    citations?: string[]
   }[]
   withheldCount: number
 }
@@ -91,6 +93,7 @@ export interface ReleaseInput {
 export interface ReleaseReceipt {
   releasedCount: number
   withheldCount: number
+  answerCount: number
   sources: string[]
   earliest: string | null
   latest: string | null
@@ -106,6 +109,7 @@ export async function persistRelease(
   const receipt: ReleaseReceipt = {
     releasedCount: input.records.length,
     withheldCount: input.withheldCount,
+    answerCount: input.records.filter((r) => r.answer).length,
     sources,
     earliest: timestamps[0] ?? null,
     latest: timestamps[timestamps.length - 1] ?? null,
@@ -124,6 +128,8 @@ export async function persistRelease(
           occurred_at: r.timestamp,
           text: r.text,
           context: r.context ?? null,
+          answer: r.answer ?? null,
+          citations: r.citations ?? null,
         }))
         await tx`insert into released_records ${tx(rows)}`
       }

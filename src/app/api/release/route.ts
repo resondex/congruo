@@ -19,6 +19,10 @@ import { findOrCreateSession, persistRelease } from '@/lib/sessions'
 
 const MAX_RECORDS = 50_000
 const MAX_TEXT = 20_000
+// An AI answer runs to a couple of thousand words; a query does not.
+const MAX_ANSWER = 100_000
+const MAX_CITATIONS = 100
+const MAX_URL = 2_000
 
 interface ReleasePayload {
   studySlug: string
@@ -33,6 +37,8 @@ interface ReleasePayload {
     timestamp: string
     text: string
     context?: string
+    answer?: string
+    citations?: string[]
   }[]
   withheldCount: number
 }
@@ -76,10 +82,8 @@ function validate(body: unknown): ReleasePayload | { error: string } {
     if (typeof record !== 'object' || record === null) {
       return { error: 'Each record must be an object.' }
     }
-    const { source, timestamp, text, context } = record as Record<
-      string,
-      unknown
-    >
+    const { source, timestamp, text, context, answer, citations } =
+      record as Record<string, unknown>
     if (typeof source !== 'string' || !SOURCES.has(source)) {
       return { error: `Unknown source: ${String(source)}` }
     }
@@ -91,6 +95,21 @@ function validate(body: unknown): ReleasePayload | { error: string } {
     }
     if (context !== undefined && typeof context !== 'string') {
       return { error: 'context must be a string when present.' }
+    }
+    if (answer !== undefined) {
+      if (typeof answer !== 'string' || answer.length > MAX_ANSWER) {
+        return { error: 'An answer exceeded the length limit.' }
+      }
+    }
+    if (citations !== undefined) {
+      if (!Array.isArray(citations) || citations.length > MAX_CITATIONS) {
+        return { error: 'citations must be an array within the limit.' }
+      }
+      for (const url of citations) {
+        if (typeof url !== 'string' || url.length > MAX_URL) {
+          return { error: 'A citation was not a usable URL.' }
+        }
+      }
     }
   }
 
@@ -138,6 +157,9 @@ export async function POST(request: NextRequest) {
   const receipt = {
     releasedCount: result.records.length,
     withheldCount: result.withheldCount,
+    // Counted after the client has stripped answers it held back, so this is
+    // what we actually received rather than what was in the archive.
+    answerCount: result.records.filter((r) => r.answer).length,
     sources: [...new Set(result.records.map((r) => r.source))],
     earliest: timestamps[0] ?? null,
     latest: timestamps[timestamps.length - 1] ?? null,
