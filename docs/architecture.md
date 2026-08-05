@@ -121,6 +121,42 @@ same thing, and that correspondence cannot be recovered after the fact by
 looking at the wording. It is declared when the instrument is authored. The
 reconcile module consumes it; nothing writes a score yet.
 
+## Why branching is a closed condition language
+
+`show_if` and `terminate_if` are small JSON conditions, not expressions to
+evaluate. These rules decide what each respondent was actually asked, so they
+end up in the method section of whatever the client publishes and have to be
+readable by someone who is not going to run them. It also means a questionnaire
+row cannot do anything but compare answers already given.
+
+Three properties are load-bearing:
+
+- **Every operator is total.** A condition referencing an unanswered question is
+  false, never an error, so a bad rule cannot strand someone mid-page. In
+  particular an unanswered question fails `is_not` as well as `is` - "did not
+  say yes" and "was never asked" are different states, and conflating them fires
+  branches for people who never reached the question they depend on.
+- **Orphaned answers are dropped, not stored.** Change the answer that opened a
+  branch and the replies underneath it are pruned at submit, so the client never
+  receives an answer to a question that respondent was not shown. Pruning is at
+  submit rather than on every keystroke, so going back and forth over a branch
+  does not destroy work.
+- **Rules that can never fire are logged.** A `show_if` referring to a later
+  question, or a malformed condition, is reported at load. A branch that never
+  fires looks exactly like a branch nobody matched, which is why it is worth
+  code to catch. `terminate_if` may refer to its own question - that is how a
+  screen-out is written - so only `show_if` must look strictly backwards.
+
+Screening is decided server-side. The client evaluates the same conditions to
+route the form, but whether someone qualifies is not something a browser
+asserts. Answers given before the screen-out are kept: they are what the
+incidence rate is calculated from, and discarding them would make the
+qualifying rate unmeasurable from our own data. `screened_out_at` is distinct
+from `declined_at` on purpose - declining is a choice about sharing, being
+screened out is us deciding someone is out of scope, and counting the second as
+the first would understate willingness to share, which is the number the whole
+model rests on.
+
 ## Why the client carries a session id
 
 Every step of a full-service journey has to land on one `sessions` row. Append

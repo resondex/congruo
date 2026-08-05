@@ -32,6 +32,7 @@ type Step =
   | 'reconcile'
   | 'done'
   | 'declined'
+  | 'screened_out'
 
 interface Progress {
   step: Step
@@ -207,6 +208,14 @@ export default function StudyFlow({
         const data = await response.json().catch(() => ({}))
         return data.error ?? 'Could not save your answers.'
       }
+      const data = await response.json().catch(() => ({}))
+      // Screening is decided on the server from the study's own rules, not
+      // here. The client evaluates the same conditions to route the form, but
+      // whether someone qualifies is not a thing a browser gets to assert.
+      if (data.screenedOut) {
+        save({ ...current, step: 'screened_out' })
+        return null
+      }
     } catch {
       return 'Could not reach the server. Please try again.'
     }
@@ -231,6 +240,20 @@ export default function StudyFlow({
           onDecline={() => void submitConsent([], 'declined')}
         />
       </>
+    )
+  }
+
+  if (progress.step === 'screened_out') {
+    return (
+      <section>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Thank you for your time
+        </h1>
+        <p className="mt-3 max-w-prose text-neutral-600">
+          Based on your answers, this particular study is not a match. You do
+          not need to do anything else, and there is no file to share.
+        </p>
+      </section>
     )
   }
 

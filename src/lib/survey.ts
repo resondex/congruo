@@ -11,6 +11,7 @@
  */
 
 import type { SourceKind } from './records'
+import { evaluate, referencedCodes, type Condition } from './conditions'
 
 export type QuestionType = 'single' | 'multiple' | 'scale' | 'number' | 'text'
 
@@ -49,6 +50,10 @@ export interface Question {
   minLabel?: string
   maxLabel?: string
   claim?: Claim
+  /** Asked only when this holds. Absent means always asked. */
+  showIf?: Condition
+  /** Ends the interview when this holds, evaluated on leaving the page. */
+  terminateIf?: Condition
 }
 
 /** One screen. Questions sharing a page number are answered together. */
@@ -70,9 +75,41 @@ export type AnswerValue =
 
 export type Answers = Record<string, AnswerValue | undefined>
 
-export function groupIntoPages(questions: Question[]): Page[] {
+/**
+ * Whether a question is asked, given what has been answered so far.
+ *
+ * A question whose condition references one that was itself skipped is also
+ * skipped, because the referenced answer is absent and every comparison
+ * against an absent answer is false. That cascade is the intended behaviour:
+ * a follow-up to a follow-up should not surface on its own.
+ */
+export function isVisible(question: Question, answers: Answers): boolean {
+  return question.showIf ? evaluate(question.showIf, answers) : true
+}
+
+export function visibleQuestions(
+  questions: Question[],
+  answers: Answers
+): Question[] {
+  return questions.filter((q) => isVisible(q, answers))
+}
+
+/**
+ * Pages, with skipped questions removed and pages that empty out dropped.
+ *
+ * Recomputed on every answer rather than fixed at the start, so the progress
+ * indicator reflects the route this respondent is actually on. It will move as
+ * they answer - a branch that opens three more questions genuinely does make
+ * the interview longer, and a bar that pretends otherwise is a worse lie than
+ * one that shifts.
+ */
+export function groupIntoPages(
+  questions: Question[],
+  answers: Answers = {}
+): Page[] {
   const byPage = new Map<number, Question[]>()
   for (const question of [...questions].sort((a, b) => a.position - b.position)) {
+    if (!isVisible(question, answers)) continue
     const list = byPage.get(question.page) ?? []
     list.push(question)
     byPage.set(question.page, list)
@@ -80,6 +117,87 @@ export function groupIntoPages(questions: Question[]): Page[] {
   return [...byPage.entries()]
     .sort(([a], [b]) => a - b)
     .map(([page, qs]) => ({ page, questions: qs }))
+}
+
+/**
+ * Drops answers to questions that are not asked on this respondent's route.
+ *
+ * Someone who answers a follow-up and then changes the answer that opened it
+ * must not have the orphaned reply delivered - the client would be reading
+ * responses to a question this person was never shown. Pruning happens at
+ * submit rather than as they type, so going back and forth over a branch does
+ * not destroy work they may return to.
+ */
+export function pruneAnswers(
+  questions: Question[],
+  answers: Answers
+): Answers {
+  const asked = new Set(visibleQuestions(questions, answers).map((q) => q.code))
+  const out: Answers = {}
+  for (const [code, value] of Object.entries(answers)) {
+    if (asked.has(code) && value !== undefined) out[code] = value
+  }
+  return out
+}
+
+/**
+ * The first question whose termination rule fires, or null.
+ *
+ * Only questions the respondent was actually shown can screen them out. A rule
+ * on a skipped question refers to a page they never saw.
+ */
+export function terminatedBy(
+  questions: Question[],
+  answers: Answers
+): Question | null {
+  for (const question of visibleQuestions(questions, answers)) {
+    if (question.terminateIf && evaluate(question.terminateIf, answers)) {
+      return question
+    }
+  }
+  return null
+}
+
+/**
+ * Rules that reference a later question, which can therefore never fire.
+ *
+ * Returned rather than thrown so a questionnaire with one bad rule still
+ * fields; the caller logs it. A silent never-firing branch is the failure mode
+ * worth spending code to avoid, because it looks exactly like a branch that
+ * nobody happened to match.
+ */
+export function forwardReferences(
+  questions: Question[]
+): { code: string; references: string[] }[] {
+  const positions = new Map(questions.map((q) => [q.code, q.position]))
+  const problems: { code: string; references: string[] }[] = []
+
+  for (const question of questions) {
+    // The two rules see different things. `show_if` decides whether to ask,
+    // so it must look strictly backwards - a question cannot depend on its own
+    // answer to decide whether it is asked. `terminate_if` is evaluated once
+    // the page has been answered, so referring to its own question is not only
+    // legal but the usual way a screen-out is written.
+    const bad = [
+      ...(question.showIf ? referencedCodes(question.showIf) : []).filter(
+        (code) => {
+          const at = positions.get(code)
+          return at === undefined || at >= question.position
+        }
+      ),
+      ...(question.terminateIf ? referencedCodes(question.terminateIf) : []).filter(
+        (code) => {
+          const at = positions.get(code)
+          return at === undefined || at > question.position
+        }
+      ),
+    ]
+    if (bad.length) {
+      problems.push({ code: question.code, references: [...new Set(bad)] })
+    }
+  }
+
+  return problems
 }
 
 /**
@@ -153,6 +271,9 @@ export function validateAnswer(
 }
 
 export const MAX_TEXT_ANSWER = 5_000
+
+/** Re-exported so callers touch one module for the instrument. */
+export type { Condition } from './conditions'
 
 export function pageIsComplete(page: Page, answers: Answers): boolean {
   return page.questions.every((q) => validateAnswer(q, answers[q.code]) === null)

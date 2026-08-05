@@ -17,6 +17,7 @@ import {
   groupIntoPages,
   pageIsComplete,
   scalePoints,
+  terminatedBy,
   validateAnswer,
   MAX_TEXT_ANSWER,
   type AnswerValue,
@@ -32,7 +33,9 @@ interface Props {
 }
 
 export default function Survey({ questions, answers, onAnswer, onDone }: Props) {
-  const pages = groupIntoPages(questions)
+  // Recomputed every render: answering a question can open or close a branch,
+  // and the page after this one is not knowable until the current one is done.
+  const pages = groupIntoPages(questions, answers)
   const [index, setIndex] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -40,11 +43,22 @@ export default function Survey({ questions, answers, onAnswer, onDone }: Props) 
   // answer is wrong before they have finished giving it is just nagging.
   const [showProblems, setShowProblems] = useState(false)
 
-  const page = pages[index]
+  // Changing an earlier answer can close a branch and shorten the interview
+  // out from under the current position, so clamp rather than render nothing.
+  const at = Math.min(index, pages.length - 1)
+  const page = pages[at]
   if (!page) return null
 
-  const isLast = index === pages.length - 1
+  const isLast = at === pages.length - 1
   const complete = pageIsComplete(page, answers)
+
+  async function submit() {
+    setBusy(true)
+    setError(null)
+    const problem = await onDone()
+    setBusy(false)
+    if (problem) setError(problem)
+  }
 
   async function next() {
     if (!complete) {
@@ -52,16 +66,24 @@ export default function Survey({ questions, answers, onAnswer, onDone }: Props) 
       return
     }
     setShowProblems(false)
+
+    // Screening happens as soon as the answer that decides it has been given,
+    // not at the end. Walking someone through the rest of an interview they
+    // have already failed to qualify for wastes their time and buys nothing -
+    // the answers so far are submitted either way, because they are what the
+    // incidence rate is calculated from. The server re-evaluates the same
+    // rules and is what actually marks the session.
+    if (terminatedBy(questions, answers)) {
+      await submit()
+      return
+    }
+
     if (!isLast) {
-      setIndex(index + 1)
+      setIndex(at + 1)
       window.scrollTo({ top: 0 })
       return
     }
-    setBusy(true)
-    setError(null)
-    const problem = await onDone()
-    setBusy(false)
-    if (problem) setError(problem)
+    await submit()
   }
 
   return (
@@ -70,17 +92,17 @@ export default function Survey({ questions, answers, onAnswer, onDone }: Props) 
         <div
           className="h-1 flex-1 overflow-hidden rounded-full bg-neutral-200"
           role="progressbar"
-          aria-valuenow={index + 1}
+          aria-valuenow={at + 1}
           aria-valuemin={1}
           aria-valuemax={pages.length}
         >
           <div
             className="h-full bg-neutral-900 transition-all"
-            style={{ width: `${((index + 1) / pages.length) * 100}%` }}
+            style={{ width: `${((at + 1) / pages.length) * 100}%` }}
           />
         </div>
         <span className="text-xs tabular-nums text-neutral-500">
-          {index + 1} of {pages.length}
+          {at + 1} of {pages.length}
         </span>
       </div>
 
@@ -115,12 +137,12 @@ export default function Survey({ questions, answers, onAnswer, onDone }: Props) 
         >
           {busy ? 'Saving…' : isLast ? 'Finish' : 'Continue'}
         </button>
-        {index > 0 && (
+        {at > 0 && (
           <button
             type="button"
             onClick={() => {
               setShowProblems(false)
-              setIndex(index - 1)
+              setIndex(at - 1)
             }}
             className="text-sm text-neutral-500 underline hover:text-neutral-900"
           >

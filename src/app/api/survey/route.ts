@@ -3,7 +3,14 @@ import { getStudy } from '@/lib/studies'
 import { dbConfigured } from '@/lib/db'
 import { findOrCreateSession } from '@/lib/sessions'
 import { getQuestions, persistSurvey } from '@/lib/survey_store'
-import { validateAnswer, type AnswerValue, type Answers } from '@/lib/survey'
+import {
+  pruneAnswers,
+  terminatedBy,
+  validateAnswer,
+  visibleQuestions,
+  type AnswerValue,
+  type Answers,
+} from '@/lib/survey'
 
 /**
  * Records the survey, which must be complete before the respondent reaches
@@ -92,31 +99,44 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const parsed: Answers = {}
+  // Read everything first: visibility is decided by the answers themselves, so
+  // there is nothing to branch on until they are parsed.
+  const submitted: Answers = {}
   for (const question of questions) {
     const raw = (answers as Record<string, unknown>)[question.code]
-    const given = raw !== undefined && raw !== null
-
-    let answer: AnswerValue | undefined
-    if (given) {
-      const read = readAnswer(raw)
-      if (!read) {
-        return Response.json(
-          { error: `Could not read the answer to ${question.code}.` },
-          { status: 400 }
-        )
-      }
-      answer = read
+    if (raw === undefined || raw === null) continue
+    const answer = readAnswer(raw)
+    if (!answer) {
+      return Response.json(
+        { error: `Could not read the answer to ${question.code}.` },
+        { status: 400 }
+      )
     }
-    const problem = validateAnswer(question, answer)
+    submitted[question.code] = answer
+  }
+
+  // Answers to questions this respondent's route never reached are dropped
+  // rather than rejected. Storing one would deliver a reply to a question they
+  // were not asked; rejecting would dead-end someone whose tab went stale over
+  // a branch, and protects nothing that dropping does not.
+  const parsed = pruneAnswers(questions, submitted)
+  const dropped = Object.keys(submitted).filter((code) => !(code in parsed))
+  if (dropped.length) {
+    console.warn(`dropped answers to unasked questions: ${dropped.join(', ')}`)
+  }
+
+  // Only what they were actually shown is required of them.
+  for (const question of visibleQuestions(questions, parsed)) {
+    const problem = validateAnswer(question, parsed[question.code])
     if (problem) {
       return Response.json(
         { error: `${question.code}: ${problem}`, question: question.code },
         { status: 400 }
       )
     }
-    if (answer) parsed[question.code] = answer
   }
+
+  const terminator = terminatedBy(questions, parsed)
 
   try {
     const session = await findOrCreateSession(
@@ -124,9 +144,17 @@ export async function POST(request: NextRequest) {
       respondentId as string | undefined,
       sessionId as string | undefined
     )
-    const { answered } = await persistSurvey(session.id, parsed)
+    const { answered } = await persistSurvey(session.id, parsed, !!terminator)
     return Response.json(
-      { recorded: true, answered, sessionId: session.id },
+      {
+        recorded: true,
+        answered,
+        sessionId: session.id,
+        // The answers up to the screen-out are kept. They are how the client
+        // works out what their incidence actually was, and throwing them away
+        // would make the qualifying rate unmeasurable from our own data.
+        screenedOut: !!terminator,
+      },
       { status: 200 }
     )
   } catch (error) {

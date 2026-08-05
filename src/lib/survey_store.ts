@@ -1,6 +1,13 @@
 import 'server-only'
 import { db, dbConfigured } from './db'
-import type { Answers, Claim, Question, QuestionType } from './survey'
+import {
+  forwardReferences,
+  type Answers,
+  type Claim,
+  type Question,
+  type QuestionType,
+} from './survey'
+import { isCondition } from './conditions'
 
 /**
  * Loading and storing the instrument.
@@ -23,6 +30,23 @@ interface QuestionRow {
   min_label: string | null
   max_label: string | null
   claim: Claim | null
+  show_if: unknown
+  terminate_if: unknown
+}
+
+/**
+ * A malformed rule is dropped and logged rather than applied.
+ *
+ * The alternative to dropping is a condition that throws or silently evaluates
+ * false forever, and a branch that never fires is indistinguishable from one
+ * nobody matched. Dropping it means the question is always asked, which
+ * over-collects rather than under-collects.
+ */
+function readCondition(raw: unknown, code: string, field: string) {
+  if (raw === null || raw === undefined) return undefined
+  if (isCondition(raw)) return raw
+  console.warn(`ignoring malformed ${field} on question ${code}`)
+  return undefined
 }
 
 function fromRow(row: QuestionRow): Question {
@@ -40,6 +64,8 @@ function fromRow(row: QuestionRow): Question {
     minLabel: row.min_label ?? undefined,
     maxLabel: row.max_label ?? undefined,
     claim: row.claim ?? undefined,
+    showIf: readCondition(row.show_if, row.code, 'show_if'),
+    terminateIf: readCondition(row.terminate_if, row.code, 'terminate_if'),
   }
 }
 
@@ -53,12 +79,24 @@ export async function getQuestions(studySlug: string): Promise<Question[]> {
 
   const rows = await db()<QuestionRow[]>`
     select code, position, page, type, prompt, help, options, required,
-           min_value, max_value, min_label, max_label, claim
+           min_value, max_value, min_label, max_label, claim,
+           show_if, terminate_if
     from survey_questions
     where study_slug = ${studySlug}
     order by position
   `
-  return rows.map(fromRow)
+  const questions = rows.map(fromRow)
+
+  // Authoring check, not a runtime one: a rule that looks forward can never
+  // fire, and that reads as "nobody matched" rather than as a mistake.
+  for (const problem of forwardReferences(questions)) {
+    console.warn(
+      `question ${problem.code} in study ${studySlug} references ` +
+        `${problem.references.join(', ')}, which it cannot see`
+    )
+  }
+
+  return questions
 }
 
 /**
@@ -71,7 +109,8 @@ export async function getQuestions(studySlug: string): Promise<Question[]> {
  */
 export async function persistSurvey(
   sessionId: string,
-  answers: Answers
+  answers: Answers,
+  screenedOut = false
 ): Promise<{ answered: number }> {
   const rows = Object.entries(answers)
     .filter(([, value]) => value !== undefined)
@@ -108,8 +147,14 @@ export async function persistSurvey(
       `
     }
 
+    // Screened out is still a completed survey - they answered everything they
+    // were asked. The two stamps say different things and both are wanted:
+    // one is "we have their self-report", the other is "they are not in scope".
     await tx`
-      update sessions set survey_done_at = now() where id = ${sessionId}
+      update sessions set
+        survey_done_at  = now(),
+        screened_out_at = ${screenedOut ? tx`now()` : tx`screened_out_at`}
+      where id = ${sessionId}
     `
   })
 
