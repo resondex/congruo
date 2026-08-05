@@ -13,6 +13,8 @@ export type SourceKind =
   | 'google_video_search'
   | 'google_hotels'
   | 'google_shopping'
+  | 'youtube'
+  | 'youtube_engagement'
   | 'gemini'
   | 'chatgpt'
   | 'claude'
@@ -27,6 +29,12 @@ export const SOURCE_LABELS: Record<SourceKind, string> = {
   google_video_search: 'Google video search',
   google_hotels: 'Google hotels',
   google_shopping: 'Google shopping',
+  youtube: 'YouTube videos',
+  // Split from watching on purpose. "Watched a video" and "disliked this
+  // political channel" are not the same disclosure, and a study buying search
+  // behaviour should not receive someone's stated preferences as a by-product
+  // of them ticking one box.
+  youtube_engagement: 'YouTube likes and subscriptions',
   gemini: 'Gemini',
   chatgpt: 'ChatGPT',
   claude: 'Claude',
@@ -83,6 +91,17 @@ export const SOURCE_GROUPS: SourceGroup[] = [
       'AI Mode answers you were shown, and the sources they cited',
       'Image and video searches',
       'Shopping and hotel searches',
+    ],
+    exportUrl: TAKEOUT,
+    exportName: 'Google',
+  },
+  {
+    id: 'youtube',
+    label: 'YouTube activity',
+    sources: ['youtube', 'youtube_engagement'],
+    includes: [
+      'Videos you watched, and what you searched for on YouTube',
+      'Channels you subscribed to, and videos you liked or disliked',
     ],
     exportUrl: TAKEOUT,
     exportName: 'Google',
@@ -148,6 +167,9 @@ export type ActionKind =
   | 'viewed'
   | 'visited'
   | 'used'
+  | 'subscribed'
+  | 'liked'
+  | 'disliked'
   | 'other'
 
 const ACTION_PATTERNS: [RegExp, ActionKind][] = [
@@ -156,6 +178,9 @@ const ACTION_PATTERNS: [RegExp, ActionKind][] = [
   [/^viewed\b/i, 'viewed'],
   [/^visited\b/i, 'visited'],
   [/^used\b/i, 'used'],
+  [/^subscribed\b/i, 'subscribed'],
+  [/^liked\b/i, 'liked'],
+  [/^disliked\b/i, 'disliked'],
 ]
 
 export function classifyAction(phrase: string): ActionKind {

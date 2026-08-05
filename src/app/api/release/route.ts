@@ -56,6 +56,8 @@ const SOURCES = new Set([
   'google_video_search',
   'google_hotels',
   'google_shopping',
+  'youtube',
+  'youtube_engagement',
   'gemini',
   'chatgpt',
   'claude',

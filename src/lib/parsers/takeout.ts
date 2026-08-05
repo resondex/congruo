@@ -56,6 +56,15 @@ interface TakeoutEntry {
 const TITLE_VERBS = [
   'Ran internet speed test',
   'Viewed image from ',
+  // YouTube. Without these the engagement half of a real archive - 24 of 40
+  // entries - is dropped as unrecognised, which is now silent by design.
+  'Subscribed to ',
+  'Commented on ',
+  'Disliked ',
+  'Joined ',
+  'Shared ',
+  'Saved ',
+  'Liked ',
   'Searched for ',
   'Searched with ',
   'Viewed job ',
@@ -92,6 +101,46 @@ function splitTitle(title: string): { phrase: string; text: string } | null {
     }
   }
   return null
+}
+
+/**
+ * Verbs that make a YouTube entry a statement of preference rather than a
+ * record of consumption.
+ *
+ * Both live in one Takeout file, so the distinction cannot be drawn from the
+ * path the way every other source is. It is drawn per record instead, because
+ * the two are not equally sensitive: watching a video and disliking a
+ * political channel are different things to hand over, and a study should be
+ * able to ask for one without the other.
+ */
+const ENGAGEMENT_VERBS = new Set([
+  'Subscribed to',
+  'Commented on',
+  'Disliked',
+  'Joined',
+  'Shared',
+  'Saved',
+  'Liked',
+])
+
+/**
+ * Sources whose HTML blocks carry a generated answer after the timestamp.
+ *
+ * The HTML export has no field for it - the answer is simply whatever follows
+ * the date - so the rule has to come from the product. Applying it everywhere
+ * is what made a YouTube block's channel subtitle parse as a six-word "AI
+ * answer", which is a fabricated record of something the respondent was never
+ * shown. The JSON export names the field explicitly and needs no such guess.
+ */
+const ANSWER_BEARING = new Set<SourceKind>([
+  'google_ai_mode',
+  'gemini',
+  'perplexity',
+])
+
+function refineSource(source: SourceKind, phrase: string): SourceKind {
+  if (source !== 'youtube') return source
+  return ENGAGEMENT_VERBS.has(phrase) ? 'youtube_engagement' : 'youtube'
 }
 
 /**
@@ -162,10 +211,11 @@ export function parseTakeoutActivity(
       continue
     }
     const { phrase, text } = split
+    const actual = refineSource(source, phrase)
 
     out.records.push({
-      id: recordId(source, timestamp, text),
-      source,
+      id: recordId(actual, timestamp, text),
+      source: actual,
       timestamp,
       text,
       action: classifyAction(phrase || title),
@@ -194,12 +244,10 @@ export function parseTakeoutActivity(
  *   Lens    - image queries, no usable text
  *   Drive, Ads, Analytics, Developers, Discover, Takeout - not behaviour
  *
- * Excluded for scope rather than principle, and the two worth revisiting:
+ * Excluded for scope rather than principle, and worth revisiting:
  *   Maps    - place searches. Genuinely search behaviour, and not small: one
  *             real archive had 161 of them against 7,213 web searches. Out
  *             only because no study has asked for them yet.
- *   YouTube - watch and search history. A media study would want it; a search
- *             and AI study does not.
  *
  * Anything not listed here is read by no rule and reported by no counter, so
  * add a folder to one of these lists rather than leaving it to fall through.
@@ -211,6 +259,10 @@ const FOLDER_SOURCES: [RegExp, SourceKind][] = [
   [/\/hotels\//, 'google_hotels'],
   [/\/shopping\//, 'google_shopping'],
   [/\/gemini[^/]*\//, 'gemini'],
+  // Watching and engagement arrive in this one file and are separated per
+  // record by refineSource. "YouTube Music" is a different product and is not
+  // matched here.
+  [/\/youtube\//, 'youtube'],
   // Last: "/search/" would otherwise swallow "/image search/".
   [/\/search\//, 'google_search'],
 ]
@@ -428,15 +480,17 @@ export function parseTakeoutHtml(
     // Every action is extracted and tagged. Which ones a study keeps is
     // policy, applied later - "Watched" is noise for a search study and the
     // entire signal for a media one.
+    const actual = refineSource(source, phrase)
+
     out.records.push({
-      id: recordId(source, timestamp, text),
-      source,
+      id: recordId(actual, timestamp, text),
+      source: actual,
       timestamp,
       text,
       action: classifyAction(phrase || text),
       actionPhrase: phrase || undefined,
       url,
-      ...extractAnswer(answerMarkup),
+      ...(ANSWER_BEARING.has(source) ? extractAnswer(answerMarkup) : {}),
     })
   }
 

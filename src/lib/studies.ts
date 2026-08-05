@@ -63,6 +63,8 @@ const FALLBACK_STUDIES: Record<string, Study> = {
       'google_video_search',
       'google_hotels',
       'google_shopping',
+      'youtube',
+      'youtube_engagement',
       'gemini',
       'chatgpt',
     ],
