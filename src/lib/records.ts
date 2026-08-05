@@ -245,6 +245,11 @@ export function normaliseAnswer(text: string): string {
     .trim()
 }
 
+export interface AnswerPassage {
+  text: string
+  citations: { url: string; text: string }[]
+}
+
 export interface ActivityRecord {
   /** Stable within a session; used for dedup and for review-list keys. */
   id: string
@@ -276,6 +281,15 @@ export interface ActivityRecord {
   answer?: string
   /** Sources the AI cited in that answer, in the order shown. */
   citations?: string[]
+  /**
+   * The answer broken into the blocks it was written in, each carrying the
+   * citations anchored inside it.
+   *
+   * This is what makes "which claim did it source, and how much did it source
+   * at all" answerable. The flat `citations` list above is kept because it is
+   * what most queries want, but it has already discarded the positions.
+   */
+  passages?: AnswerPassage[]
 }
 
 /**

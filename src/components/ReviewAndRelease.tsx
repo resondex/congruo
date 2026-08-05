@@ -217,13 +217,24 @@ export default function ReviewAndRelease({
     list
       .filter((r) => !r.withheld)
       .map(
-        ({ source, timestamp, text, context, answer, citations, withheldAnswer }) => ({
+        ({
           source,
           timestamp,
           text,
           context,
+          answer,
+          citations,
+          passages,
+          withheldAnswer,
+        }) => ({
+          source,
+          timestamp,
+          text,
+          context,
+          // Passages are the answer, cut up. They go when it goes.
           answer: withheldAnswer ? undefined : answer,
           citations: withheldAnswer ? undefined : citations,
+          passages: withheldAnswer ? undefined : passages,
         })
       )
 

@@ -406,9 +406,62 @@ function stripScaffolding(text: string): string {
   return text.replace(SCAFFOLDING, ' ')
 }
 
+/**
+ * Splits an answer into the blocks it was written in, each with the citations
+ * linked inside it.
+ *
+ * The flat citation list says an answer cited four sources; it does not say
+ * which claim each one backed, or - more to the point - how much of the answer
+ * cited nothing at all. On a real archive that gap is the whole story: 22
+ * citations across roughly 440 blocks, so the overwhelming majority of what an
+ * AI asserted was unattributed. A client asking which sources an assistant
+ * repeats cannot answer it from a list that has already thrown the positions
+ * away.
+ *
+ * A block - paragraph, list item, heading - is the unit because it is the unit
+ * the answer was composed in, and because a citation sits inside exactly one
+ * of them. Sentence splitting would be finer and wrong: the anchors straddle
+ * sentence boundaries often enough that the attribution would be a guess.
+ */
+export interface AnswerPassage {
+  text: string
+  /** Citations anchored inside this passage, in the order they appear. */
+  citations: { url: string; text: string }[]
+}
+
+const BLOCK_BOUNDARY =
+  /<\/?(?:p|li|h[1-6]|div|ul|ol|pre|blockquote|tr|table|section)\b[^>]*>|<br\s*\/?>/gi
+
+export function extractPassages(markup: string): AnswerPassage[] {
+  const passages: AnswerPassage[] = []
+
+  for (const chunk of markup.replace(BLOCK_BOUNDARY, '\u0000').split('\u0000')) {
+    if (!chunk.trim()) continue
+
+    const citations: { url: string; text: string }[] = []
+    for (const m of chunk.matchAll(/<a\b[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)) {
+      const url = decodeEntities(m[1])
+      if (!/^https?:/i.test(url)) continue
+      citations.push({
+        url,
+        text: normaliseText(decodeEntities(m[2].replace(/<[^>]+>/g, ' '))),
+      })
+    }
+
+    const text = normaliseText(
+      stripScaffolding(decodeEntities(chunk.replace(/<[^>]+>/g, ' ')))
+    )
+    if (!text && !citations.length) continue
+    passages.push({ text, citations })
+  }
+
+  return passages
+}
+
 export function extractAnswer(markup: string): {
   answer?: string
   citations?: string[]
+  passages?: AnswerPassage[]
 } {
   if (!markup.trim()) return {}
 
@@ -428,9 +481,12 @@ export function extractAnswer(markup: string): {
     )
   )
 
+  const passages = extractPassages(markup)
+
   return {
     answer: answer || undefined,
     citations: citations.length ? citations : undefined,
+    passages: passages.length ? passages : undefined,
   }
 }
 

@@ -23,6 +23,8 @@ const MAX_TEXT = 20_000
 const MAX_ANSWER = 100_000
 const MAX_CITATIONS = 100
 const MAX_URL = 2_000
+// One block per paragraph or list item; a long answer runs to a few hundred.
+const MAX_PASSAGES = 1_000
 
 interface ReleasePayload {
   studySlug: string
@@ -45,6 +47,7 @@ interface ReleasePayload {
     context?: string
     answer?: string
     citations?: string[]
+    passages?: { text: string; citations: { url: string; text: string }[] }[]
   }[]
   withheldCount: number
 }
@@ -92,7 +95,7 @@ function validate(body: unknown): ReleasePayload | { error: string } {
     if (typeof record !== 'object' || record === null) {
       return { error: 'Each record must be an object.' }
     }
-    const { source, timestamp, text, context, answer, citations } =
+    const { source, timestamp, text, context, answer, citations, passages } =
       record as Record<string, unknown>
     if (typeof source !== 'string' || !SOURCES.has(source)) {
       return { error: `Unknown source: ${String(source)}` }
@@ -118,6 +121,32 @@ function validate(body: unknown): ReleasePayload | { error: string } {
       for (const url of citations) {
         if (typeof url !== 'string' || url.length > MAX_URL) {
           return { error: 'A citation was not a usable URL.' }
+        }
+      }
+    }
+    if (passages !== undefined) {
+      if (!Array.isArray(passages) || passages.length > MAX_PASSAGES) {
+        return { error: 'passages must be an array within the limit.' }
+      }
+      for (const passage of passages) {
+        if (typeof passage !== 'object' || passage === null) {
+          return { error: 'Each passage must be an object.' }
+        }
+        const { text: ptext, citations: pcites } = passage as Record<string, unknown>
+        if (typeof ptext !== 'string' || ptext.length > MAX_ANSWER) {
+          return { error: 'A passage exceeded the length limit.' }
+        }
+        if (!Array.isArray(pcites) || pcites.length > MAX_CITATIONS) {
+          return { error: 'A passage had an unusable citation list.' }
+        }
+        for (const cite of pcites) {
+          const { url, text: ctext } = (cite ?? {}) as Record<string, unknown>
+          if (typeof url !== 'string' || url.length > MAX_URL) {
+            return { error: 'A passage citation was not a usable URL.' }
+          }
+          if (typeof ctext !== 'string' || ctext.length > MAX_TEXT) {
+            return { error: 'A passage citation label was unusable.' }
+          }
         }
       }
     }

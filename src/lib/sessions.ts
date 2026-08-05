@@ -120,6 +120,7 @@ export interface ReleaseInput {
     context?: string
     answer?: string
     citations?: string[]
+    passages?: { text: string; citations: { url: string; text: string }[] }[]
   }[]
   withheldCount: number
 }
@@ -164,6 +165,11 @@ export async function persistRelease(
           context: r.context ?? null,
           answer: r.answer ?? null,
           citations: r.citations ?? null,
+          // tx.json, not JSON.stringify. Stringifying stores the array as a
+          // jsonb *string*, so jsonb_array_length and every other json operator
+          // fails on it - the column would be there and unusable for the one
+          // query it exists to answer.
+          passages: r.passages ? tx.json(r.passages) : null,
         }))
         await tx`insert into released_records ${tx(rows)}`
       }
