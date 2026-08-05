@@ -13,6 +13,7 @@ export type SourceKind =
   | 'google_video_search'
   | 'google_hotels'
   | 'google_shopping'
+  | 'google_maps'
   | 'youtube'
   | 'youtube_engagement'
   | 'gemini'
@@ -29,6 +30,7 @@ export const SOURCE_LABELS: Record<SourceKind, string> = {
   google_video_search: 'Google video search',
   google_hotels: 'Google hotels',
   google_shopping: 'Google shopping',
+  google_maps: 'Google Maps',
   youtube: 'YouTube videos',
   // Split from watching on purpose. "Watched a video" and "disliked this
   // political channel" are not the same disclosure, and a study buying search
@@ -91,6 +93,17 @@ export const SOURCE_GROUPS: SourceGroup[] = [
       'AI Mode answers you were shown, and the sources they cited',
       'Image and video searches',
       'Shopping and hotel searches',
+    ],
+    exportUrl: TAKEOUT,
+    exportName: 'Google',
+  },
+  {
+    id: 'google_maps',
+    label: 'Google Maps activity',
+    sources: ['google_maps'],
+    includes: [
+      'Places you looked up and directions you asked for',
+      'This is a record of where you went, so it is asked for separately',
     ],
     exportUrl: TAKEOUT,
     exportName: 'Google',
@@ -170,6 +183,8 @@ export type ActionKind =
   | 'subscribed'
   | 'liked'
   | 'disliked'
+  | 'navigated'
+  | 'shared'
   | 'other'
 
 const ACTION_PATTERNS: [RegExp, ActionKind][] = [
@@ -181,6 +196,10 @@ const ACTION_PATTERNS: [RegExp, ActionKind][] = [
   [/^subscribed\b/i, 'subscribed'],
   [/^liked\b/i, 'liked'],
   [/^disliked\b/i, 'disliked'],
+  // Maps. Asking for directions is a stated intention to go somewhere, which
+  // is a different claim from having looked a place up.
+  [/^directions to\b/i, 'navigated'],
+  [/^shared\b/i, 'shared'],
 ]
 
 export function classifyAction(phrase: string): ActionKind {

@@ -18,6 +18,7 @@ const SOURCES = new Set([
   'google_video_search',
   'google_hotels',
   'google_shopping',
+  'google_maps',
   'youtube',
   'youtube_engagement',
   'gemini',

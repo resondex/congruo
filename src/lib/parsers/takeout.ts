@@ -54,8 +54,9 @@ interface TakeoutEntry {
  * export yields for the same event and quietly desynchronises the two formats.
  */
 const TITLE_VERBS = [
-  'Ran internet speed test',
   'Viewed image from ',
+  // Maps.
+  'Directions to ',
   // YouTube. Without these the engagement half of a real archive - 24 of 40
   // entries - is dropped as unrecognised, which is now silent by design.
   'Subscribed to ',
@@ -75,6 +76,35 @@ const TITLE_VERBS = [
   'Viewed ',
   'Used ',
 ]
+
+/**
+ * Whole titles that record that a product was opened, not anything done in it.
+ *
+ * Takeout files these alongside real activity and they carry no measurable
+ * subject: "Used Search" yields the word "Search". Left in, a real archive
+ * delivered 87 of them to a client as behaviour. Matched as whole titles
+ * rather than as verbs, because that is what they are - a verb list is for
+ * splitting an action off its object, and these have no object.
+ */
+const BOILERPLATE = [
+  /^\d+ notifications?$/i,
+  /^used (search|maps|google maps|lens|assistant|gemini|chrome|youtube)$/i,
+  /^explored on google maps$/i,
+  /^ran internet speed test$/i,
+]
+
+const isBoilerplate = (title: string) => BOILERPLATE.some((p) => p.test(title))
+
+/**
+ * Sources where a title with no verb is the subject itself.
+ *
+ * Maps writes a viewed place as its bare name or address - "Hilton Garden
+ * Inn", "3208 W 51st Ave" - with the place in titleUrl and no verb anywhere.
+ * Sixty of one archive's 161 Maps entries look like that. Everywhere else a
+ * verbless title is Google's own notice and dropping it is the point, so this
+ * cannot be the default.
+ */
+const BARE_TITLE_SOURCES = new Set<SourceKind>(['google_maps'])
 
 /**
  * Splits a title into what they did and what they did it to.
@@ -138,6 +168,14 @@ const ANSWER_BEARING = new Set<SourceKind>([
   'perplexity',
 ])
 
+/** A verbless title, where the source says that is the subject. */
+function bareTitle(
+  source: SourceKind,
+  title: string
+): { phrase: string; text: string } | null {
+  return BARE_TITLE_SOURCES.has(source) ? { phrase: 'Viewed', text: title } : null
+}
+
 function refineSource(source: SourceKind, phrase: string): SourceKind {
   if (source !== 'youtube') return source
   return ENGAGEMENT_VERBS.has(phrase) ? 'youtube_engagement' : 'youtube'
@@ -200,8 +238,12 @@ export function parseTakeoutActivity(
 
     const title = normaliseText(raw.title ?? '')
     if (!title) continue
+    if (isBoilerplate(title)) {
+      out.contentless++
+      continue
+    }
 
-    const split = splitTitle(title)
+    const split = splitTitle(title) ?? bareTitle(source, title)
     if (!split) {
       out.unrecognised++
       continue
@@ -244,10 +286,6 @@ export function parseTakeoutActivity(
  *   Lens    - image queries, no usable text
  *   Drive, Ads, Analytics, Developers, Discover, Takeout - not behaviour
  *
- * Excluded for scope rather than principle, and worth revisiting:
- *   Maps    - place searches. Genuinely search behaviour, and not small: one
- *             real archive had 161 of them against 7,213 web searches. Out
- *             only because no study has asked for them yet.
  *
  * Anything not listed here is read by no rule and reported by no counter, so
  * add a folder to one of these lists rather than leaving it to fall through.
@@ -263,6 +301,7 @@ const FOLDER_SOURCES: [RegExp, SourceKind][] = [
   // record by refineSource. "YouTube Music" is a different product and is not
   // matched here.
   [/\/youtube\//, 'youtube'],
+  [/\/maps\//, 'google_maps'],
   // Last: "/search/" would otherwise swallow "/image search/".
   [/\/search\//, 'google_search'],
 ]
@@ -452,8 +491,18 @@ export function parseTakeoutHtml(
       phrase = decodeEntities(head.slice(0, anchor.index!).replace(/<[^>]+>/g, ''))
         .replace(/\s+/g, ' ')
         .trim()
+      // The whole cell, verb and link together, can still be a usage notice.
+      const whole = normaliseText(decodeEntities(head.replace(/<[^>]+>/g, '')))
+      if (isBoilerplate(whole)) {
+        out.contentless++
+        continue
+      }
       text = normaliseText(decodeEntities(anchor[1].replace(/<[^>]+>/g, '')))
       url = anchor[0].match(/href="([^"]*)"/)?.[1]
+      // Maps links the place with no verb in front of it. The JSON export of
+      // the same row has no verb either and is read as a view, so say so here
+      // too rather than letting the two formats disagree on the action.
+      if (!phrase && BARE_TITLE_SOURCES.has(source)) phrase = 'Viewed'
     } else {
       // Verb and subject are one run of text; split on the verb rather than
       // by length, which would truncate a long query.
@@ -463,7 +512,11 @@ export function parseTakeoutHtml(
       // rows are kept whatever their verb: a link means there was a thing they
       // acted on, which is the definition of an activity.
       const plain = normaliseText(decodeEntities(head.replace(/<[^>]+>/g, '')))
-      const split = splitTitle(plain)
+      if (isBoilerplate(plain)) {
+        out.contentless++
+        continue
+      }
+      const split = splitTitle(plain) ?? bareTitle(source, plain)
       if (!split) {
         out.unrecognised++
         continue
