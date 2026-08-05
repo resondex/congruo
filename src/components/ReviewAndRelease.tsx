@@ -39,6 +39,11 @@ interface Props {
   allowedSources?: SourceKind[]
   /** Absent in full-service mode, where we keep the respondent ourselves. */
   returnTo?: ReturnTargets
+  /**
+   * Offered on the receipt in full-service mode, to carry on to reconcile.
+   * Append studies have no next step here - they are handed back instead.
+   */
+  onContinue?: () => void
 }
 
 interface Receipt {
@@ -76,6 +81,7 @@ export default function ReviewAndRelease({
   window: studyWindow,
   allowedSources,
   returnTo,
+  onContinue,
 }: Props) {
   const [records, setRecords] = useState<ReviewedRecord[] | null>(null)
   const [report, setReport] = useState<IntakeReport | null>(null)
@@ -285,6 +291,15 @@ export default function ReviewAndRelease({
           Records you held back were never sent. You can ask us to delete
           everything at any time.
         </p>
+        {onContinue && (
+          <button
+            type="button"
+            onClick={onContinue}
+            className="mt-8 rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white"
+          >
+            One last thing
+          </button>
+        )}
       </section>
     )
   }

@@ -20,10 +20,18 @@ import { useCallback, useState, useSyncExternalStore } from 'react'
 import ConsentAndRequest from './ConsentAndRequest'
 import ReviewAndRelease from './ReviewAndRelease'
 import Survey from './Survey'
+import Reconcile from './Reconcile'
 import { SOURCE_LABELS, type SourceKind } from '@/lib/records'
 import type { AnswerValue, Answers, Question } from '@/lib/survey'
 
-type Step = 'consent' | 'survey' | 'waiting' | 'review' | 'declined'
+type Step =
+  | 'consent'
+  | 'survey'
+  | 'waiting'
+  | 'review'
+  | 'reconcile'
+  | 'done'
+  | 'declined'
 
 interface Progress {
   step: Step
@@ -320,17 +328,44 @@ export default function StudyFlow({
     )
   }
 
+  if (progress.step === 'reconcile') {
+    const current = progress
+    return (
+      <Reconcile
+        studySlug={studySlug}
+        sessionId={current.sessionId}
+        onDone={() => save({ ...current, step: 'done' })}
+      />
+    )
+  }
+
+  if (progress.step === 'done') {
+    return (
+      <section>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          You are all done
+        </h1>
+        <p className="mt-3 max-w-prose text-neutral-600">
+          Thank you for taking part. You can ask us to delete everything you
+          shared at any time.
+        </p>
+      </section>
+    )
+  }
+
+  const current = progress
   return (
     <>
       <p className="mb-8 text-sm text-neutral-500">
-        {studyName} · step {questions.length ? 4 : 3} of{' '}
+        {studyName} · step {questions.length ? 3 : 2} of{' '}
         {questions.length ? 4 : 3}
       </p>
       <ReviewAndRelease
         studySlug={studySlug}
-        sessionId={progress.sessionId}
+        sessionId={current.sessionId}
         window={studyWindow}
         allowedSources={sources}
+        onContinue={() => save({ ...current, step: 'reconcile' })}
       />
     </>
   )
