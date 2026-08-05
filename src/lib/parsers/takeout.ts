@@ -207,12 +207,15 @@ export interface ParseResult {
   unrecognised: number
   /** Recognised acts with no subject to measure, e.g. an internet speed test. */
   contentless: number
+  /** HTML blocks carrying no line that parses as a date. */
+  undated: number
 }
 
 const empty = (): ParseResult => ({
   records: [],
   unrecognised: 0,
   contentless: 0,
+  undated: 0,
 })
 
 export function parseTakeoutActivity(
@@ -331,8 +334,33 @@ const TZ_OFFSETS: Record<string, number> = {
   HST: -10, BST: 1, CET: 1, CEST: 2, IST: 5.5, JST: 9, AEST: 10, AEDT: 11,
 }
 
+const MONTH = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i
+
+/**
+ * Whether a line is plausibly a date at all.
+ *
+ * Date.parse is permissive to the point of being dangerous on arbitrary text.
+ * A YouTube block lists the channel before the date, and a channel called
+ * "Last War: Survival Server #1146" parsed as the year 1146 - so that record
+ * took a timestamp 879 years off and the real date, two lines below, was never
+ * reached. A wrong date is worse than a missing one: nothing about it looks
+ * like a failure.
+ *
+ * Requiring a year, a clock time, and either a month name or a numeric date
+ * covers what Takeout emits both in locales that spell months out and in those
+ * that write dates numerically, while rejecting prose that merely contains a
+ * number.
+ */
+function looksLikeDate(text: string): boolean {
+  if (text.length > 64) return false
+  if (!/\b\d{4}\b/.test(text)) return false
+  if (!/\d{1,2}:\d{2}/.test(text)) return false
+  return MONTH.test(text) || /\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}/.test(text)
+}
+
 function parseActivityTime(raw: string): string | null {
   const text = raw.trim()
+  if (!looksLikeDate(text)) return null
   const match = text.match(/^(.*?)[\s ]+([A-Z]{2,4})$/)
 
   if (match && match[2] in TZ_OFFSETS) {
@@ -479,7 +507,10 @@ export function parseTakeoutHtml(
         break
       }
     }
-    if (!timestamp) continue
+    if (!timestamp) {
+      out.undated++
+      continue
+    }
 
     const anchor = head.match(/<a\b[^>]*>([\s\S]*?)<\/a>/)
 

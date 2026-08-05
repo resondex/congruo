@@ -37,6 +37,8 @@ export interface IntakeReport {
   unrecognised: number
   /** Recognised acts with no subject to measure, e.g. an internet speed test. */
   contentless: number
+  /** HTML blocks carrying no line that parses as a date. */
+  undated: number
   /** Records removed as exact repeats of one already kept. */
   duplicates: number
   /** Records dropped for falling outside the study's date range. */
@@ -65,9 +67,10 @@ function parseMember(path: string, bytes: Uint8Array): ParseResult {
       records: parseChatGPTExport(strFromU8(bytes)),
       unrecognised: 0,
       contentless: 0,
+      undated: 0,
     }
   }
-  return { records: [], unrecognised: 0, contentless: 0 }
+  return { records: [], unrecognised: 0, contentless: 0, undated: 0 }
 }
 
 export async function readArchive(
@@ -92,6 +95,7 @@ export async function readArchive(
     empty: [],
     unrecognised: 0,
     contentless: 0,
+    undated: 0,
     duplicates: 0,
     outsideWindow: 0,
   }
@@ -101,6 +105,7 @@ export async function readArchive(
     const parsed = parseMember(file.name, bytes)
     report.unrecognised += parsed.unrecognised
     report.contentless += parsed.contentless
+    report.undated += parsed.undated
     const records = keep(parsed.records)
     if (records.length) {
       report.read.push(file.name)
@@ -133,6 +138,7 @@ export async function readArchive(
     const parsed = parseMember(path, content)
     report.unrecognised += parsed.unrecognised
     report.contentless += parsed.contentless
+    report.undated += parsed.undated
     const records = keep(parsed.records)
     if (!records.length) {
       if (takeoutSourceForPath(path) || path.endsWith('conversations.json')) {
