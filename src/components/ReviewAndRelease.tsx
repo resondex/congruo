@@ -517,11 +517,19 @@ export default function ReviewAndRelease({
                         )}
                       </div>
 
+                      {/*
+                        A two-state control, so each button always sets the
+                        state it names. It was previously one button whose
+                        action depended on the state it was showing, which meant
+                        "Include these" re-applied the hold-back it was offering
+                        to undo, and a source could not be brought back.
+                      */}
                       <div className="flex shrink-0 gap-2">
                         <button
                           type="button"
+                          aria-pressed={!allOut}
                           onClick={() =>
-                            setWithheld((r) => r.source === group.source, allOut)
+                            setWithheld((r) => r.source === group.source, false)
                           }
                           className={`rounded-md border px-3 py-1.5 text-sm font-medium transition ${
                             allOut
@@ -529,17 +537,21 @@ export default function ReviewAndRelease({
                               : 'border-neutral-900 bg-neutral-900 text-white'
                           }`}
                         >
-                          {allOut ? 'Include these' : 'Sending'}
+                          {someOut && !allOut ? 'Include all' : 'Sending'}
                         </button>
                         <button
                           type="button"
+                          aria-pressed={allOut}
                           onClick={() =>
                             setWithheld((r) => r.source === group.source, true)
                           }
-                          disabled={allOut}
-                          className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm transition hover:border-neutral-500 disabled:opacity-30"
+                          className={`rounded-md border px-3 py-1.5 text-sm font-medium transition ${
+                            allOut
+                              ? 'border-neutral-900 bg-neutral-900 text-white'
+                              : 'border-neutral-300 hover:border-neutral-500'
+                          }`}
                         >
-                          Hold back
+                          {allOut ? 'Held back' : 'Hold back'}
                         </button>
                       </div>
                     </div>
