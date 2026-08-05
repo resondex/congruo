@@ -43,29 +43,107 @@ interface TakeoutEntry {
 }
 
 /**
- * Takeout writes the action into the title: "Searched for foo", "Visited bar",
- * "Watched baz". We split the verb off the subject and keep both - no entry is
- * discarded here, because deciding which actions matter is a study setting,
- * not a parsing detail.
+ * One row per Google product.
  *
- * Longest first, and several of these are more than one word. Getting that
- * wrong is silent: "Viewed image from X" against a one-word "Viewed " prefix
- * leaves "image from X" as the subject, which differs from what the HTML
- * export yields for the same event and quietly desynchronises the two formats.
+ * Everything that differs between products lives here, because the format does
+ * not differ at all: every product writes the same JSON entry shape and the
+ * same HTML block shape, and only the reading of them changes. Six parsers
+ * would duplicate the container, timestamp and anchor handling and let the
+ * copies drift, which is the failure this table exists to prevent - drift
+ * between two things that should be identical is most of what a parser audit
+ * ever finds.
+ *
+ * Adding a product is adding a row. Anything not listed here is read by no
+ * rule and counted by no counter.
+ *
+ * Order matters: `folder` patterns are tried in sequence, so "/search/" must
+ * come last or it swallows "/image search/".
  */
-const TITLE_VERBS = [
+interface Product {
+  /** Path fragment inside "My Activity", lowercased. */
+  folder: RegExp
+  source: SourceKind
+  /** Verbs this product uses beyond the shared list. */
+  verbs?: string[]
+  /**
+   * A title with no verb is the subject itself.
+   *
+   * Maps writes a viewed place as its bare name or address - "Hilton Garden
+   * Inn", "3208 W 51st Ave" - with the place in titleUrl and no verb anywhere.
+   * Everywhere else a verbless title is Google's own notice and dropping it is
+   * the point, so this cannot be the default.
+   */
+  bareTitleIsSubject?: boolean
+  /**
+   * The HTML after the timestamp is a generated answer.
+   *
+   * The HTML export has no field for it - the answer is simply whatever
+   * follows the date - so the rule has to come from the product. Applying it
+   * everywhere made a YouTube channel subtitle parse as a six-word "AI
+   * answer". The JSON export names the field and needs no such guess.
+   */
+  carriesAnswer?: boolean
+  /**
+   * Verbs that move a record to a second source.
+   *
+   * YouTube watching and YouTube engagement arrive in one file and cannot be
+   * told apart by path, but they are not equally sensitive: a study measuring
+   * search behaviour should be able to ask for what someone watched without
+   * also collecting what they liked.
+   */
+  splitBy?: { verbs: string[]; into: SourceKind }
+}
+
+const PRODUCTS: Product[] = [
+  { folder: /\/image search\//, source: 'google_image_search' },
+  { folder: /\/video search\//, source: 'google_video_search' },
+  { folder: /\/ai[ _]mode\//, source: 'google_ai_mode', carriesAnswer: true },
+  { folder: /\/hotels\//, source: 'google_hotels' },
+  { folder: /\/shopping\//, source: 'google_shopping' },
+  { folder: /\/gemini[^/]*\//, source: 'gemini', carriesAnswer: true },
+  {
+    // "YouTube Music" is a different product and is not matched here.
+    folder: /\/youtube\//,
+    source: 'youtube',
+    verbs: ['Subscribed to ', 'Commented on ', 'Disliked ', 'Joined ', 'Liked '],
+    splitBy: {
+      verbs: ['Subscribed to', 'Commented on', 'Disliked', 'Joined', 'Shared', 'Saved', 'Liked'],
+      into: 'youtube_engagement',
+    },
+  },
+  {
+    folder: /\/maps\//,
+    source: 'google_maps',
+    verbs: ['Directions to '],
+    bareTitleIsSubject: true,
+  },
+  { folder: /\/search\//, source: 'google_search' },
+]
+
+const BY_SOURCE = new Map(PRODUCTS.map((p) => [p.source, p]))
+
+/** The product a record belongs to, including one reached by splitBy. */
+function productFor(source: SourceKind): Product | undefined {
+  return (
+    BY_SOURCE.get(source) ??
+    PRODUCTS.find((p) => p.splitBy?.into === source)
+  )
+}
+
+/**
+ * Verbs shared by every product, plus whatever the products add.
+ *
+ * Longest first, and several are more than one word. Getting that order wrong
+ * is silent: "Viewed image from X" against a one-word "Viewed " prefix leaves
+ * "image from X" as the subject, which differs from what the HTML export
+ * yields for the same event and quietly desynchronises the two formats.
+ *
+ * One list rather than one per product. A verb missing where it was needed
+ * drops records, and the cost of a verb being recognised somewhere it never
+ * appears is nothing.
+ */
+const SHARED_VERBS = [
   'Viewed image from ',
-  // Maps.
-  'Directions to ',
-  // YouTube. Without these the engagement half of a real archive - 24 of 40
-  // entries - is dropped as unrecognised, which is now silent by design.
-  'Subscribed to ',
-  'Commented on ',
-  'Disliked ',
-  'Joined ',
-  'Shared ',
-  'Saved ',
-  'Liked ',
   'Searched for ',
   'Searched with ',
   'Viewed job ',
@@ -73,9 +151,15 @@ const TITLE_VERBS = [
   'Searched ',
   'Watched ',
   'Defined ',
+  'Shared ',
   'Viewed ',
+  'Saved ',
   'Used ',
 ]
+
+const TITLE_VERBS = [
+  ...new Set([...SHARED_VERBS, ...PRODUCTS.flatMap((p) => p.verbs ?? [])]),
+].sort((a, b) => b.length - a.length)
 
 /**
  * Whole titles that record that a product was opened, not anything done in it.
@@ -95,35 +179,6 @@ const BOILERPLATE = [
 
 const isBoilerplate = (title: string) => BOILERPLATE.some((p) => p.test(title))
 
-/**
- * Sources where a title with no verb is the subject itself.
- *
- * Maps writes a viewed place as its bare name or address - "Hilton Garden
- * Inn", "3208 W 51st Ave" - with the place in titleUrl and no verb anywhere.
- * Sixty of one archive's 161 Maps entries look like that. Everywhere else a
- * verbless title is Google's own notice and dropping it is the point, so this
- * cannot be the default.
- */
-const BARE_TITLE_SOURCES = new Set<SourceKind>(['google_maps'])
-
-/**
- * Splits a title into what they did and what they did it to.
- *
- * Returns null when the title starts with no verb we know. That is not the
- * same as an activity with no subject, and the difference decides whether a
- * record is kept:
- *
- *   "Searched for pliers"      -> a search              keep
- *   "Ran internet speed test"  -> an act with no subject drop, nothing to measure
- *   "1 notification"           -> not an activity        drop, and count it
- *
- * The last case is why this cannot fall back to keeping the whole title.
- * Google files its own notices under Search, and a real archive had 21 of them
- * being handed to the respondent as their own search history and on to a
- * client as behaviour. Unrecognised titles are counted rather than discarded
- * quietly, so a verb Google adds later shows up as a number instead of as
- * silent data loss.
- */
 function splitTitle(title: string): { phrase: string; text: string } | null {
   for (const verb of TITLE_VERBS) {
     if (title.startsWith(verb)) {
@@ -133,52 +188,19 @@ function splitTitle(title: string): { phrase: string; text: string } | null {
   return null
 }
 
-/**
- * Verbs that make a YouTube entry a statement of preference rather than a
- * record of consumption.
- *
- * Both live in one Takeout file, so the distinction cannot be drawn from the
- * path the way every other source is. It is drawn per record instead, because
- * the two are not equally sensitive: watching a video and disliking a
- * political channel are different things to hand over, and a study should be
- * able to ask for one without the other.
- */
-const ENGAGEMENT_VERBS = new Set([
-  'Subscribed to',
-  'Commented on',
-  'Disliked',
-  'Joined',
-  'Shared',
-  'Saved',
-  'Liked',
-])
-
-/**
- * Sources whose HTML blocks carry a generated answer after the timestamp.
- *
- * The HTML export has no field for it - the answer is simply whatever follows
- * the date - so the rule has to come from the product. Applying it everywhere
- * is what made a YouTube block's channel subtitle parse as a six-word "AI
- * answer", which is a fabricated record of something the respondent was never
- * shown. The JSON export names the field explicitly and needs no such guess.
- */
-const ANSWER_BEARING = new Set<SourceKind>([
-  'google_ai_mode',
-  'gemini',
-  'perplexity',
-])
-
 /** A verbless title, where the source says that is the subject. */
 function bareTitle(
   source: SourceKind,
   title: string
 ): { phrase: string; text: string } | null {
-  return BARE_TITLE_SOURCES.has(source) ? { phrase: 'Viewed', text: title } : null
+  return productFor(source)?.bareTitleIsSubject
+    ? { phrase: 'Viewed', text: title }
+    : null
 }
 
 function refineSource(source: SourceKind, phrase: string): SourceKind {
-  if (source !== 'youtube') return source
-  return ENGAGEMENT_VERBS.has(phrase) ? 'youtube_engagement' : 'youtube'
+  const split = BY_SOURCE.get(source)?.splitBy
+  return split?.verbs.includes(phrase) ? split.into : source
 }
 
 /**
@@ -281,39 +303,21 @@ export function parseTakeoutActivity(
  * for JSON - and refusing it would cost them another export and another wait.
  */
 /**
- * Folder name inside "My Activity" to the source it represents.
- *
- * Deliberately excluded, and worth keeping excluded:
+ * Folders deliberately not read, and worth keeping that way:
  *   Gmail   - searches inside a private mailbox, not public behaviour
  *   Help    - Google support queries
  *   Lens    - image queries, no usable text
  *   Drive, Ads, Analytics, Developers, Discover, Takeout - not behaviour
  *
- *
- * Anything not listed here is read by no rule and reported by no counter, so
- * add a folder to one of these lists rather than leaving it to fall through.
+ * Everything read is a row in PRODUCTS. A folder in neither list is silently
+ * ignored, so add it to one of them rather than leaving it to fall through.
  */
-const FOLDER_SOURCES: [RegExp, SourceKind][] = [
-  [/\/image search\//, 'google_image_search'],
-  [/\/video search\//, 'google_video_search'],
-  [/\/ai[ _]mode\//, 'google_ai_mode'],
-  [/\/hotels\//, 'google_hotels'],
-  [/\/shopping\//, 'google_shopping'],
-  [/\/gemini[^/]*\//, 'gemini'],
-  // Watching and engagement arrive in this one file and are separated per
-  // record by refineSource. "YouTube Music" is a different product and is not
-  // matched here.
-  [/\/youtube\//, 'youtube'],
-  [/\/maps\//, 'google_maps'],
-  // Last: "/search/" would otherwise swallow "/image search/".
-  [/\/search\//, 'google_search'],
-]
 
 export function takeoutSourceForPath(path: string): SourceKind | null {
   const lower = path.toLowerCase()
   if (!/myactivity\.(json|html)$/.test(lower)) return null
-  for (const [pattern, source] of FOLDER_SOURCES) {
-    if (pattern.test(lower)) return source
+  for (const product of PRODUCTS) {
+    if (product.folder.test(lower)) return product.source
   }
   return null
 }
@@ -533,7 +537,7 @@ export function parseTakeoutHtml(
       // Maps links the place with no verb in front of it. The JSON export of
       // the same row has no verb either and is read as a view, so say so here
       // too rather than letting the two formats disagree on the action.
-      if (!phrase && BARE_TITLE_SOURCES.has(source)) phrase = 'Viewed'
+      if (!phrase && productFor(source)?.bareTitleIsSubject) phrase = 'Viewed'
     } else {
       // Verb and subject are one run of text; split on the verb rather than
       // by length, which would truncate a long query.
@@ -574,7 +578,7 @@ export function parseTakeoutHtml(
       action: classifyAction(phrase || text),
       actionPhrase: phrase || undefined,
       url,
-      ...(ANSWER_BEARING.has(source) ? extractAnswer(answerMarkup) : {}),
+      ...(productFor(source)?.carriesAnswer ? extractAnswer(answerMarkup) : {}),
     })
   }
 
