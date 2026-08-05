@@ -10,6 +10,9 @@ import type { SourceKind } from './records'
  * redirect land on the same row.
  */
 
+const UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export interface SessionRow {
   id: string
   study_slug: string
@@ -17,15 +20,46 @@ export interface SessionRow {
 }
 
 /**
- * Append mode sends the respondent to us twice, so the second hop has to find
- * the row the first hop created rather than opening a new one. Full-service
- * sessions have no external id and always get a fresh row.
+ * Resolves the session a request belongs to, creating one if needed.
+ *
+ * Both modes have to land every step of one respondent's journey on a single
+ * row, by different means. Append mode is keyed on the referring platform's
+ * respondent id, which arrives on both hops. Full-service respondents have no
+ * such id, so the client carries the session id we hand back at consent.
+ *
+ * Getting this wrong is not a cosmetic bug: consent, survey and release
+ * scattered across three rows means survey answers cannot be joined to
+ * released records, which is the measurement, and no one can be counted as
+ * having answered but declined, which is invariant 3.
  */
 export async function findOrCreateSession(
   studySlug: string,
-  externalRespondentId?: string
+  externalRespondentId?: string,
+  sessionId?: string
 ): Promise<SessionRow> {
   const sql = db()
+
+  // Checked before it reaches Postgres: a malformed id is a stale or hand-typed
+  // value, and comparing it to a uuid column would raise rather than miss.
+  if (sessionId && !UUID.test(sessionId)) sessionId = undefined
+
+  if (sessionId) {
+    // Matched on the study as well as the id, so a session id cannot be used
+    // to write into a different study's fielding.
+    const existing = await sql<SessionRow[]>`
+      select id, study_slug, external_respondent_id
+      from sessions
+      where id = ${sessionId} and study_slug = ${studySlug}
+      limit 1
+    `
+    if (existing.length) return existing[0]
+
+    // An id we do not recognise means the respondent's earlier rows are
+    // unreachable whatever we do - a wiped database, or a link shared to a
+    // different deployment. Opening a fresh session at least keeps what they
+    // are doing now, where refusing would lose that too.
+    console.warn('unknown session id for study', studySlug)
+  }
 
   if (externalRespondentId) {
     const existing = await sql<SessionRow[]>`

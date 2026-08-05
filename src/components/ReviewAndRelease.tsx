@@ -29,6 +29,11 @@ export interface ReturnTargets {
 interface Props {
   studySlug: string
   respondentId?: string
+  /**
+   * Full-service only. Append mode joins on the referring platform's
+   * respondent id instead, which arrives on both hops.
+   */
+  sessionId?: string
   window?: { from?: Date; to?: Date }
   /** Sources the respondent granted; anything else is dropped at parse time. */
   allowedSources?: SourceKind[]
@@ -67,6 +72,7 @@ function domainOf(url: string) {
 export default function ReviewAndRelease({
   studySlug,
   respondentId,
+  sessionId,
   window: studyWindow,
   allowedSources,
   returnTo,
@@ -182,6 +188,7 @@ export default function ReviewAndRelease({
         body: JSON.stringify({
           studySlug,
           respondentId,
+          sessionId,
           withheldCount: records?.length ?? 0,
           records: [],
         }),
@@ -204,11 +211,15 @@ export default function ReviewAndRelease({
       const response = await fetch('/api/release', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        // No session id: the server resolves the session from the study and
-        // respondent id, so a client cannot write into someone else's row.
+        // The session is resolved server-side from these, and is always
+        // checked against the study, so neither key can reach another
+        // study's fielding. There is no auth anywhere in this flow - a
+        // respondent arrives from a link - so this identifies a row rather
+        // than authorising anything.
         body: JSON.stringify({
           studySlug,
           respondentId,
+          sessionId,
           withheldCount,
           records: payloadFor(records),
         }),

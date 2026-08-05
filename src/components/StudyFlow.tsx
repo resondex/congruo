@@ -1,7 +1,12 @@
 'use client'
 
 /**
- * The full-service flow: consent, request, wait, review, release.
+ * The full-service flow: consent, request, survey, wait, review, release.
+ *
+ * The survey sits before the wait rather than after it, so the export builds
+ * while the respondent answers. It also has to finish before they reach review
+ * (invariant 2), and putting it here means that ordering is a property of the
+ * flow rather than something a later change has to remember.
  *
  * Resumability is the point. Exports take minutes to hours, so the respondent
  * will close the tab and come back later - probably when the vendor's email
@@ -14,14 +19,31 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
 import ConsentAndRequest from './ConsentAndRequest'
 import ReviewAndRelease from './ReviewAndRelease'
+import Survey from './Survey'
 import { SOURCE_LABELS, type SourceKind } from '@/lib/records'
+import type { AnswerValue, Answers, Question } from '@/lib/survey'
 
-type Step = 'consent' | 'waiting' | 'review' | 'declined'
+type Step = 'consent' | 'survey' | 'waiting' | 'review' | 'declined'
 
 interface Progress {
   step: Step
   granted: SourceKind[]
   requestedAt: string
+  /**
+   * The session opened at consent, carried through the rest of the flow.
+   *
+   * A full-service respondent has no external id, so without this every step
+   * would open its own row and their answers could never be joined to their
+   * records. It is not a credential - it identifies a row we created for this
+   * person and holds nothing until they put something in it.
+   */
+  sessionId?: string
+  /**
+   * Kept locally as they are given, not only on submit. Half an instrument
+   * answered on a bus is real effort, and losing it to a closed tab is how a
+   * respondent decides not to come back.
+   */
+  answers?: Answers
 }
 
 interface Props {
@@ -29,6 +51,7 @@ interface Props {
   studyName: string
   sources: SourceKind[]
   disclosureVersion: string
+  questions: Question[]
   window?: { from?: Date; to?: Date }
 }
 
@@ -92,6 +115,7 @@ export default function StudyFlow({
   studyName,
   sources,
   disclosureVersion,
+  questions,
   window: studyWindow,
 }: Props) {
   const store = storeFor(studySlug)
@@ -120,6 +144,7 @@ export default function StudyFlow({
 
   async function submitConsent(granted: SourceKind[], next: Step) {
     setError(null)
+    let sessionId: string | undefined
     try {
       const response = await fetch('/api/consent', {
         method: 'POST',
@@ -139,11 +164,46 @@ export default function StudyFlow({
         setError(data.error ?? 'Could not record your choices.')
         return
       }
+      const data = await response.json().catch(() => ({}))
+      if (typeof data.sessionId === 'string') sessionId = data.sessionId
     } catch {
       setError('Could not reach the server. Please try again.')
       return
     }
-    save({ step: next, granted, requestedAt: new Date().toISOString() })
+    save({
+      step: next,
+      granted,
+      sessionId,
+      requestedAt: new Date().toISOString(),
+    })
+  }
+
+  /**
+   * Submits the instrument. Returns a message on failure so the survey can
+   * keep the respondent on the page with their answers intact - advancing on a
+   * failed write would send someone to review having contributed no
+   * self-report, which is exactly what invariant 2 protects against.
+   */
+  async function submitSurvey(current: Progress): Promise<string | null> {
+    try {
+      const response = await fetch('/api/survey', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          studySlug,
+          sessionId: current.sessionId,
+          answers: current.answers ?? {},
+        }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        return data.error ?? 'Could not save your answers.'
+      }
+    } catch {
+      return 'Could not reach the server. Please try again.'
+    }
+    save({ ...current, step: 'waiting' })
+    return null
   }
 
   if (!progress || progress.step === 'consent') {
@@ -157,7 +217,9 @@ export default function StudyFlow({
         <ConsentAndRequest
           sources={sources}
           disclosureVersion={disclosureVersion}
-          onContinue={(granted) => void submitConsent(granted, 'waiting')}
+          onContinue={(granted) =>
+            void submitConsent(granted, questions.length ? 'survey' : 'waiting')
+          }
           onDecline={() => void submitConsent([], 'declined')}
         />
       </>
@@ -184,7 +246,31 @@ export default function StudyFlow({
     )
   }
 
-  if (progress.step === 'waiting') {
+  // A study whose questions were removed after this respondent started would
+  // otherwise strand them on an empty survey.
+  if (progress.step === 'survey' && questions.length) {
+    const current = progress
+    return (
+      <>
+        <p className="mb-8 text-sm text-neutral-500">
+          {studyName} · step 2 of 4
+        </p>
+        <Survey
+          questions={questions}
+          answers={current.answers ?? {}}
+          onAnswer={(code: string, value: AnswerValue | undefined) => {
+            const answers = { ...(current.answers ?? {}) }
+            if (value === undefined) delete answers[code]
+            else answers[code] = value
+            save({ ...current, answers })
+          }}
+          onDone={() => submitSurvey(current)}
+        />
+      </>
+    )
+  }
+
+  if (progress.step === 'survey' || progress.step === 'waiting') {
     return (
       <section>
         <h1 className="text-2xl font-semibold tracking-tight">
@@ -199,15 +285,17 @@ export default function StudyFlow({
           minutes, and occasionally a few hours.
         </p>
 
-        <div className="mt-8 rounded-lg border border-dashed border-neutral-300 bg-neutral-50 p-5">
-          <p className="text-sm font-medium text-neutral-900">
-            The survey runs here
-          </p>
-          <p className="mt-1 text-sm text-neutral-600">
-            In a live study you would answer questions on this screen while your
-            file is prepared. That part is not built yet.
-          </p>
-        </div>
+        {questions.length > 0 && (
+          <div className="mt-8 rounded-lg border border-neutral-200 bg-neutral-50 p-5">
+            <p className="text-sm font-medium text-neutral-900">
+              Your answers are in
+            </p>
+            <p className="mt-1 text-sm text-neutral-600">
+              Thank you - the questions are done. All that is left is your file,
+              and you decide what of it to share.
+            </p>
+          </div>
+        )}
 
         <p className="mt-8 max-w-prose text-sm text-neutral-600">
           You can close this page. Come back to the same link on this device
@@ -235,10 +323,12 @@ export default function StudyFlow({
   return (
     <>
       <p className="mb-8 text-sm text-neutral-500">
-        {studyName} · step 3 of 3
+        {studyName} · step {questions.length ? 4 : 3} of{' '}
+        {questions.length ? 4 : 3}
       </p>
       <ReviewAndRelease
         studySlug={studySlug}
+        sessionId={progress.sessionId}
         window={studyWindow}
         allowedSources={sources}
       />

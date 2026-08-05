@@ -106,6 +106,40 @@ The flow is deliberately built from primitives that work on iOS Safari:
 - `<input type="file">`, which on iOS reads from Files and iCloud Drive
 - Standard web push and email for re-engagement
 
+## Why the questionnaire lives in the database
+
+Same reason as the return-host allowlist: one deployment runs many studies, each
+with its own instrument, and a fielding tool whose questionnaire needs a deploy
+to change is the wrong shape. `survey_questions` is per study; a study with no
+rows simply has no survey step, which is what append mode is.
+
+Questions carry a `claim` describing what record-side quantity they are a
+self-report OF - a set of sources used, a claimed count in a window, a topic
+supposedly searched. This is what separates the survey module from a form
+builder. Congruence is only measurable where a question and a record measure the
+same thing, and that correspondence cannot be recovered after the fact by
+looking at the wording. It is declared when the instrument is authored. The
+reconcile module consumes it; nothing writes a score yet.
+
+## Why the client carries a session id
+
+Every step of a full-service journey has to land on one `sessions` row. Append
+mode gets this from the referring platform's respondent id, which arrives on
+both hops. Full-service respondents have no such id, and there is no account and
+no auth anywhere in the flow, so the client carries the session we open at
+consent and hands it back at survey and release.
+
+This was found broken: consent, survey and release each called
+`findOrCreateSession` with nothing to match on, so each opened its own row. The
+result was survey answers that could never be joined to released records - the
+measurement - and no way to count anyone as having answered but declined, which
+is invariant 3. Nothing failed visibly; the tables just filled with orphans.
+
+The id identifies a row rather than authorising anything, and is always matched
+against the study as well, so it cannot reach another fielding. An httpOnly
+cookie would be tighter, and is worth revisiting if the flow ever gains a step
+that a respondent could be walked into from elsewhere.
+
 ## Open question
 
 **Release rate under re-engagement**, when the archive is not ready before the

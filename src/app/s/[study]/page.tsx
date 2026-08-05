@@ -1,5 +1,6 @@
 import StudyFlow from '@/components/StudyFlow'
 import { getStudy } from '@/lib/studies'
+import { getQuestions } from '@/lib/survey_store'
 
 /**
  * Entry point for a full-service fielding: the whole flow behind one link.
@@ -27,12 +28,15 @@ export default async function StudyPage({
     )
   }
 
+  const questions = await getQuestions(study.slug)
+
   return (
     <main className="mx-auto max-w-3xl px-6 py-16">
       <StudyFlow
         studySlug={study.slug}
         studyName={study.name}
         sources={study.sources}
+        questions={questions}
         disclosureVersion={
           process.env.NEXT_PUBLIC_DISCLOSURE_VERSION ?? 'unversioned'
         }

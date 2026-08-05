@@ -32,6 +32,12 @@ interface ReleasePayload {
    * anything identifying beyond it.
    */
   respondentId?: string
+  /**
+   * Full-service respondents have no external id, so the client carries the
+   * session we opened at consent. Without it every step would land on its own
+   * row and survey answers could never be joined to released records.
+   */
+  sessionId?: string
   records: {
     source: string
     timestamp: string
@@ -60,16 +66,17 @@ function validate(body: unknown): ReleasePayload | { error: string } {
   if (typeof body !== 'object' || body === null) {
     return { error: 'Expected an object.' }
   }
-  const { studySlug, respondentId, records, withheldCount } = body as Record<
-    string,
-    unknown
-  >
+  const { studySlug, respondentId, sessionId, records, withheldCount } =
+    body as Record<string, unknown>
 
   if (typeof studySlug !== 'string' || !studySlug) {
     return { error: 'studySlug is required.' }
   }
   if (respondentId !== undefined && typeof respondentId !== 'string') {
     return { error: 'respondentId must be a string when present.' }
+  }
+  if (sessionId !== undefined && typeof sessionId !== 'string') {
+    return { error: 'sessionId must be a string when present.' }
   }
   if (!Array.isArray(records)) {
     return { error: 'records must be an array.' }
@@ -116,6 +123,7 @@ function validate(body: unknown): ReleasePayload | { error: string } {
   return {
     studySlug,
     respondentId: respondentId as string | undefined,
+    sessionId: sessionId as string | undefined,
     records: records as ReleasePayload['records'],
     withheldCount:
       typeof withheldCount === 'number' && withheldCount >= 0
@@ -174,7 +182,8 @@ export async function POST(request: NextRequest) {
   try {
     const session = await findOrCreateSession(
       result.studySlug,
-      result.respondentId
+      result.respondentId,
+      result.sessionId
     )
     const stored = await persistRelease({
       sessionId: session.id,
