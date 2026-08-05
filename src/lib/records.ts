@@ -262,7 +262,7 @@ export function recordId(
   text: string
 ): string {
   let h = 0x811c9dc5
-  const input = `${source} ${timestamp} ${text}`
+  const input = `${source}\0${timestamp}\0${text}`
   for (let i = 0; i < input.length; i++) {
     h ^= input.charCodeAt(i)
     h = Math.imul(h, 0x01000193) >>> 0
@@ -283,23 +283,45 @@ export function recordId(
  * someone's data without telling them is the one failure this product cannot
  * have.
  */
+export interface NormaliseResult {
+  records: ActivityRecord[]
+  /** Exact repeats of a record already kept. */
+  duplicates: number
+  /** Dropped for falling outside the study's date range. */
+  outsideWindow: number
+}
+
 export function normalise(
   records: ActivityRecord[],
   window?: { from?: Date; to?: Date }
-): ActivityRecord[] {
+): NormaliseResult {
   const seen = new Set<string>()
   const usedIds = new Set<string>()
   const out: ActivityRecord[] = []
+  let duplicates = 0
+  let outsideWindow = 0
 
   for (const record of records) {
-    const key = `${record.source} ${record.timestamp} ${record.text}`
-    if (seen.has(key)) continue
+    const key = `${record.source}\0${record.timestamp}\0${record.text}`
+    if (seen.has(key)) {
+      duplicates++
+      continue
+    }
 
+    // Counted apart from duplicates. Collapsing the two would make a study
+    // whose window excluded most of an archive look identical to one whose
+    // respondent repeated themselves, and only one of those is a reason to go
+    // back and widen the ask.
     if (window) {
       const at = new Date(record.timestamp).getTime()
-      if (Number.isNaN(at)) continue
-      if (window.from && at < window.from.getTime()) continue
-      if (window.to && at > window.to.getTime()) continue
+      if (
+        Number.isNaN(at) ||
+        (window.from && at < window.from.getTime()) ||
+        (window.to && at > window.to.getTime())
+      ) {
+        outsideWindow++
+        continue
+      }
     }
 
     seen.add(key)
@@ -312,5 +334,9 @@ export function normalise(
     out.push(id === record.id ? record : { ...record, id })
   }
 
-  return out.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  return {
+    records: out.sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
+    duplicates,
+    outsideWindow,
+  }
 }

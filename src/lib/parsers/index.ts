@@ -16,6 +16,7 @@ import {
   parseTakeoutActivity,
   parseTakeoutHtml,
   takeoutSourceForPath,
+  type ParseResult,
 } from './takeout'
 import { parseChatGPTExport } from './chatgpt'
 
@@ -25,6 +26,21 @@ export interface IntakeReport {
   read: string[]
   /** Archive members we recognised but that yielded nothing. */
   empty: string[]
+  /**
+   * Entries whose title began with no verb we know.
+   *
+   * Normally these are Google's own notices, which it files alongside real
+   * activity. A sharp rise means Takeout changed its wording and we are
+   * dropping real behaviour - which is exactly the failure that would
+   * otherwise look like a quiet month.
+   */
+  unrecognised: number
+  /** Recognised acts with no subject to measure, e.g. an internet speed test. */
+  contentless: number
+  /** Records removed as exact repeats of one already kept. */
+  duplicates: number
+  /** Records dropped for falling outside the study's date range. */
+  outsideWindow: number
   /** Set when we could not make sense of the file at all. */
   error?: string
 }
@@ -36,7 +52,7 @@ function unzipAsync(bytes: Uint8Array): Promise<Record<string, Uint8Array>> {
   })
 }
 
-function parseMember(path: string, bytes: Uint8Array): ActivityRecord[] {
+function parseMember(path: string, bytes: Uint8Array): ParseResult {
   const takeoutSource = takeoutSourceForPath(path)
   if (takeoutSource) {
     const text = strFromU8(bytes)
@@ -45,9 +61,13 @@ function parseMember(path: string, bytes: Uint8Array): ActivityRecord[] {
       : parseTakeoutActivity(text, takeoutSource)
   }
   if (path.toLowerCase().endsWith('conversations.json')) {
-    return parseChatGPTExport(strFromU8(bytes))
+    return {
+      records: parseChatGPTExport(strFromU8(bytes)),
+      unrecognised: 0,
+      contentless: 0,
+    }
   }
-  return []
+  return { records: [], unrecognised: 0, contentless: 0 }
 }
 
 export async function readArchive(
@@ -66,11 +86,22 @@ export async function readArchive(
     permitted ? records.filter((r) => permitted.has(r.source)) : records
 
   const bytes = new Uint8Array(await file.arrayBuffer())
-  const report: IntakeReport = { records: [], read: [], empty: [] }
+  const report: IntakeReport = {
+    records: [],
+    read: [],
+    empty: [],
+    unrecognised: 0,
+    contentless: 0,
+    duplicates: 0,
+    outsideWindow: 0,
+  }
 
   // A bare conversations.json, not zipped. Common enough to support.
   if (file.name.toLowerCase().endsWith('.json')) {
-    const records = keep(parseMember(file.name, bytes))
+    const parsed = parseMember(file.name, bytes)
+    report.unrecognised += parsed.unrecognised
+    report.contentless += parsed.contentless
+    const records = keep(parsed.records)
     if (records.length) {
       report.read.push(file.name)
     } else {
@@ -78,7 +109,10 @@ export async function readArchive(
       report.error =
         'That JSON file did not contain any recognisable activity. If it came from ChatGPT it should be conversations.json.'
     }
-    report.records = normalise(records, window)
+    const normalised = normalise(records, window)
+    report.records = normalised.records
+    report.duplicates = normalised.duplicates
+    report.outsideWindow = normalised.outsideWindow
     return report
   }
 
@@ -96,7 +130,10 @@ export async function readArchive(
   const all: ActivityRecord[] = []
   for (const [path, content] of Object.entries(members)) {
     if (!content.length) continue
-    const records = keep(parseMember(path, content))
+    const parsed = parseMember(path, content)
+    report.unrecognised += parsed.unrecognised
+    report.contentless += parsed.contentless
+    const records = keep(parsed.records)
     if (!records.length) {
       if (takeoutSourceForPath(path) || path.endsWith('conversations.json')) {
         report.empty.push(path)
@@ -107,11 +144,14 @@ export async function readArchive(
     all.push(...records)
   }
 
-  report.records = normalise(all, window)
+  const normalised = normalise(all, window)
+  report.records = normalised.records
+  report.duplicates = normalised.duplicates
+  report.outsideWindow = normalised.outsideWindow
 
   if (!report.read.length && !report.empty.length) {
     report.error =
-      'No search or conversation history was found in that archive. For Google, make sure you chose JSON rather than HTML, and included My Activity.'
+      'No search or conversation history was found in that archive. For Google, make sure "My Activity" was included in the export.'
   }
 
   return report

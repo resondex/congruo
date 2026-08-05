@@ -67,42 +67,103 @@ const TITLE_VERBS = [
   'Used ',
 ]
 
-function splitTitle(title: string): { phrase: string; text: string } {
+/**
+ * Splits a title into what they did and what they did it to.
+ *
+ * Returns null when the title starts with no verb we know. That is not the
+ * same as an activity with no subject, and the difference decides whether a
+ * record is kept:
+ *
+ *   "Searched for pliers"      -> a search              keep
+ *   "Ran internet speed test"  -> an act with no subject drop, nothing to measure
+ *   "1 notification"           -> not an activity        drop, and count it
+ *
+ * The last case is why this cannot fall back to keeping the whole title.
+ * Google files its own notices under Search, and a real archive had 21 of them
+ * being handed to the respondent as their own search history and on to a
+ * client as behaviour. Unrecognised titles are counted rather than discarded
+ * quietly, so a verb Google adds later shows up as a number instead of as
+ * silent data loss.
+ */
+function splitTitle(title: string): { phrase: string; text: string } | null {
   for (const verb of TITLE_VERBS) {
     if (title.startsWith(verb)) {
       return { phrase: verb.trim(), text: title.slice(verb.length).trim() }
     }
   }
-  return { phrase: '', text: title.trim() }
+  return null
 }
+
+/**
+ * Whole seconds.
+ *
+ * The JSON export carries milliseconds and the HTML export cannot - it prints
+ * "Aug 4, 2026, 2:21:50 PM PDT". Keeping the extra precision means the same
+ * event from the same account is a different record depending on which format
+ * the respondent happened to download, which breaks deduplication between them
+ * and makes the two exports impossible to reconcile. Nothing in this instrument
+ * measures anything at sub-second resolution.
+ */
+function toWholeSecond(iso: string): string {
+  return iso.replace(/\.\d{1,3}Z$/, '.000Z')
+}
+
+/**
+ * What one file yielded, and what it cost.
+ *
+ * The counts are not diagnostics for us - they are the difference between a
+ * parser that quietly drops a tenth of someone's archive and one that says so.
+ */
+export interface ParseResult {
+  records: ActivityRecord[]
+  /** Titles starting with no verb we know: not activity, or a format change. */
+  unrecognised: number
+  /** Recognised acts with no subject to measure, e.g. an internet speed test. */
+  contentless: number
+}
+
+const empty = (): ParseResult => ({
+  records: [],
+  unrecognised: 0,
+  contentless: 0,
+})
 
 export function parseTakeoutActivity(
   json: string,
   source: SourceKind
-): ActivityRecord[] {
+): ParseResult {
   let entries: unknown
   try {
     entries = JSON.parse(json)
   } catch {
-    return []
+    return empty()
   }
-  if (!Array.isArray(entries)) return []
+  if (!Array.isArray(entries)) return empty()
 
-  const records: ActivityRecord[] = []
+  const out = empty()
 
   for (const raw of entries as TakeoutEntry[]) {
     if (!raw || typeof raw !== 'object') continue
     if (!raw.time) continue
 
-    const timestamp = new Date(raw.time).toISOString()
+    const timestamp = toWholeSecond(new Date(raw.time).toISOString())
     if (timestamp === 'Invalid Date') continue
 
     const title = normaliseText(raw.title ?? '')
     if (!title) continue
-    const { phrase, text } = splitTitle(title)
-    if (!text) continue
 
-    records.push({
+    const split = splitTitle(title)
+    if (!split) {
+      out.unrecognised++
+      continue
+    }
+    if (!split.text) {
+      out.contentless++
+      continue
+    }
+    const { phrase, text } = split
+
+    out.records.push({
       id: recordId(source, timestamp, text),
       source,
       timestamp,
@@ -114,7 +175,7 @@ export function parseTakeoutActivity(
     })
   }
 
-  return records
+  return out
 }
 
 /**
@@ -132,6 +193,16 @@ export function parseTakeoutActivity(
  *   Help    - Google support queries
  *   Lens    - image queries, no usable text
  *   Drive, Ads, Analytics, Developers, Discover, Takeout - not behaviour
+ *
+ * Excluded for scope rather than principle, and the two worth revisiting:
+ *   Maps    - place searches. Genuinely search behaviour, and not small: one
+ *             real archive had 161 of them against 7,213 web searches. Out
+ *             only because no study has asked for them yet.
+ *   YouTube - watch and search history. A media study would want it; a search
+ *             and AI study does not.
+ *
+ * Anything not listed here is read by no rule and reported by no counter, so
+ * add a folder to one of these lists rather than leaving it to fall through.
  */
 const FOLDER_SOURCES: [RegExp, SourceKind][] = [
   [/\/image search\//, 'google_image_search'],
@@ -197,6 +268,21 @@ const ENTITIES: Record<string, string> = {
  * HTML inline after the timestamp. Block-level tags become line breaks so a
  * list does not collapse into one run-on sentence when the tags are stripped.
  */
+/**
+ * Google's own markers inside an answer, entity-encoded in the source so they
+ * survive tag stripping and reappear as literal text once entities are decoded.
+ *
+ * Only these names are removed, and only the marker - the words between them
+ * are answer text the respondent was shown. A blanket strip of anything in
+ * angle brackets is not available here: one real answer was about writing HTML
+ * and its code examples are legitimately full of them.
+ */
+const SCAFFOLDING = /<\/?(FollowUp|Query|Sources?)>/gi
+
+function stripScaffolding(text: string): string {
+  return text.replace(SCAFFOLDING, ' ')
+}
+
 export function extractAnswer(markup: string): {
   answer?: string
   citations?: string[]
@@ -210,10 +296,12 @@ export function extractAnswer(markup: string): {
   }
 
   const answer = normaliseAnswer(
-    decodeEntities(
-      markup
-        .replace(/<(br|\/p|\/li|\/h[1-6]|\/div|\/pre)\b[^>]*>/gi, '\n')
-        .replace(/<[^>]+>/g, ' ')
+    stripScaffolding(
+      decodeEntities(
+        markup
+          .replace(/<(br|\/p|\/li|\/h[1-6]|\/div|\/pre)\b[^>]*>/gi, '\n')
+          .replace(/<[^>]+>/g, ' ')
+      )
     )
   )
 
@@ -248,8 +336,8 @@ function decodeEntities(text: string): string {
 export function parseTakeoutHtml(
   html: string,
   source: SourceKind
-): ActivityRecord[] {
-  const records: ActivityRecord[] = []
+): ParseResult {
+  const out = empty()
   const blocks = html.split('outer-cell')
 
   for (const block of blocks) {
@@ -317,18 +405,30 @@ export function parseTakeoutHtml(
     } else {
       // Verb and subject are one run of text; split on the verb rather than
       // by length, which would truncate a long query.
+      //
+      // An unrecognised verb here is how Google's own notices arrive - they
+      // have no link, so they never take the anchored branch above. Anchored
+      // rows are kept whatever their verb: a link means there was a thing they
+      // acted on, which is the definition of an activity.
       const plain = normaliseText(decodeEntities(head.replace(/<[^>]+>/g, '')))
       const split = splitTitle(plain)
+      if (!split) {
+        out.unrecognised++
+        continue
+      }
       phrase = split.phrase
       text = split.text
     }
 
-    if (!text) continue
+    if (!text) {
+      out.contentless++
+      continue
+    }
 
     // Every action is extracted and tagged. Which ones a study keeps is
     // policy, applied later - "Watched" is noise for a search study and the
     // entire signal for a media one.
-    records.push({
+    out.records.push({
       id: recordId(source, timestamp, text),
       source,
       timestamp,
@@ -340,5 +440,5 @@ export function parseTakeoutHtml(
     })
   }
 
-  return records
+  return out
 }
