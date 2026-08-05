@@ -6,31 +6,16 @@
  * This is the first hop. It runs before the interview so the archives are
  * building while the respondent answers questions, which is the only thing
  * that makes the wait tolerable. See docs/architecture.md.
+ *
+ * Consent is given per group, not per source: the six Google products arrive
+ * in one export, so a checkbox for each decides nothing about what gets
+ * downloaded and reads as false precision. Each group lists what it covers,
+ * and item-by-item redaction happens at review where the respondent can see
+ * the actual records.
  */
 
-import { useEffect, useState } from 'react'
-import { SOURCE_LABELS, type SourceKind } from '@/lib/records'
-
-/**
- * Where each vendor's export lives. These drift; when one moves, the symptom
- * is a respondent landing on a settings page with no export button.
- */
-const EXPORT_URLS: Record<SourceKind, string> = {
-  // Takeout accepts a comma-separated product list in the path and preselects
-  // exactly those, everything else off. That removes two steps and, more
-  // usefully, removes any chance of ticking "Access log activity" by mistake -
-  // it is never selected to begin with.
-  google_search: 'https://takeout.google.com/settings/takeout/custom/my_activity',
-  google_ai_mode: 'https://takeout.google.com/settings/takeout/custom/my_activity',
-  google_image_search: 'https://takeout.google.com/settings/takeout/custom/my_activity',
-  google_video_search: 'https://takeout.google.com/settings/takeout/custom/my_activity',
-  google_hotels: 'https://takeout.google.com/settings/takeout/custom/my_activity',
-  google_shopping: 'https://takeout.google.com/settings/takeout/custom/my_activity',
-  gemini: 'https://takeout.google.com/settings/takeout/custom/my_activity',
-  chatgpt: 'https://chatgpt.com/#settings/DataControls',
-  claude: 'https://claude.ai/settings/data-privacy-controls',
-  perplexity: 'https://www.perplexity.ai/settings/account',
-}
+import { useEffect, useMemo, useState } from 'react'
+import { groupsFor, type SourceGroup, type SourceKind } from '@/lib/records'
 
 /**
  * Two steps, and deliberately no more.
@@ -44,16 +29,14 @@ const EXPORT_URLS: Record<SourceKind, string> = {
  * We also no longer ask them to narrow the product list. Anything we do not
  * read is discarded during parsing and never reaches the review screen, so
  * narrowing only shrinks their download - not worth the most error-prone tap
- * on a phone. The deep link already prevents the one genuinely harmful
- * mis-tick, "Access log activity", by never selecting it.
+ * on a phone.
  */
-const REQUEST_HINTS: Partial<Record<SourceKind, string[]>> = {
-  google_search: [
+const REQUEST_HINTS: Record<string, string[]> = {
+  Google: [
     'My Activity is already selected for you. Leave everything else alone.',
     'Scroll down, press "Next step", then "Create export".',
   ],
-  gemini: ['Comes in the same Google export as your search history.'],
-  chatgpt: [
+  ChatGPT: [
     'Settings, then Data controls, then Export data.',
     'OpenAI emails you a link. The file you want is the .zip.',
   ],
@@ -67,18 +50,27 @@ interface Props {
   onDecline: () => void
 }
 
+/** One download, however many groups it satisfies. */
+interface Export {
+  name: string
+  url: string
+  groups: SourceGroup[]
+}
+
 export default function ConsentAndRequest({
   sources,
   disclosureVersion,
   onContinue,
   onDecline,
 }: Props) {
-  const [granted, setGranted] = useState<Set<SourceKind>>(new Set())
+  const groups = useMemo(() => groupsFor(sources), [sources])
+
+  const [granted, setGranted] = useState<Set<string>>(new Set())
   const [understood, setUnderstood] = useState(false)
   /** They tapped the link. Says nothing about whether they finished. */
-  const [opened, setOpened] = useState<Set<SourceKind>>(new Set())
+  const [opened, setOpened] = useState<Set<string>>(new Set())
   /** They came back and told us the export actually started. */
-  const [confirmed, setConfirmed] = useState<Set<SourceKind>>(new Set())
+  const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [cameBack, setCameBack] = useState(false)
 
   /**
@@ -96,21 +88,46 @@ export default function ConsentAndRequest({
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [])
 
+  /**
+   * Requests are per download, not per group. Search activity and Gemini are
+   * separate decisions but one Takeout export, and asking someone to request
+   * the same file twice is how you lose them.
+   */
+  const exports: Export[] = useMemo(() => {
+    const byUrl = new Map<string, Export>()
+    for (const group of groups) {
+      if (!granted.has(group.id)) continue
+      const found = byUrl.get(group.exportUrl)
+      if (found) found.groups.push(group)
+      else
+        byUrl.set(group.exportUrl, {
+          name: group.exportName,
+          url: group.exportUrl,
+          groups: [group],
+        })
+    }
+    return [...byUrl.values()]
+  }, [groups, granted])
+
   const anyGranted = granted.size > 0
   // Tapping a link is not evidence of anything. Requiring them to say the
   // export started is the difference between a real gate and a decorative one.
-  const allConfirmed = [...granted].every((s) => confirmed.has(s))
-  const awaitingConfirmation = [...granted].filter(
-    (s) => opened.has(s) && !confirmed.has(s)
+  const allConfirmed = exports.every((e) => confirmed.has(e.url))
+  const awaitingConfirmation = exports.filter(
+    (e) => opened.has(e.url) && !confirmed.has(e.url)
   )
 
-  const toggle = (source: SourceKind) =>
+  const toggle = (id: string) =>
     setGranted((prev) => {
       const next = new Set(prev)
-      if (next.has(source)) next.delete(source)
-      else next.add(source)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
+
+  /** Grants stay per source: the group is how it was asked, not what it covers. */
+  const grantedSources = () =>
+    groups.filter((g) => granted.has(g.id)).flatMap((g) => g.sources)
 
   return (
     <section>
@@ -120,24 +137,34 @@ export default function ConsentAndRequest({
       <p className="mt-3 max-w-prose text-neutral-600">
         You choose each one separately, and you can take part with none of them
         selected. Later you will see exactly what your file contains and decide
-        item by item what to send.
+        what to send.
       </p>
 
       <ul className="mt-8 space-y-3">
-        {sources.map((source) => (
-          <li key={source}>
+        {groups.map((group) => (
+          <li key={group.id}>
             <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-neutral-200 p-4 transition hover:border-neutral-300">
               <input
                 type="checkbox"
                 className="mt-1"
-                checked={granted.has(source)}
-                onChange={() => toggle(source)}
+                checked={granted.has(group.id)}
+                onChange={() => toggle(group.id)}
               />
               <span>
-                <span className="font-medium">{SOURCE_LABELS[source]}</span>
-                <span className="mt-1 block text-sm text-neutral-600">
-                  Your own history, which you will review before anything is
-                  sent.
+                <span className="font-medium">{group.label}</span>
+                <ul className="mt-2 space-y-1 text-sm text-neutral-600">
+                  {group.includes.map((item) => (
+                    <li key={item} className="flex gap-2">
+                      <span aria-hidden className="text-neutral-300">
+                        —
+                      </span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+                <span className="mt-2 block text-xs text-neutral-500">
+                  Opened on your own device. You review it and choose what to
+                  send before anything reaches us.
                 </span>
               </span>
             </label>
@@ -162,32 +189,41 @@ export default function ConsentAndRequest({
         <div className="mt-10 rounded-lg border border-neutral-200 bg-neutral-50 p-5">
           <h2 className="font-medium">Now ask for your data</h2>
           <p className="mt-1 text-sm text-neutral-600">
-            Each of these takes a few minutes to prepare, so start them now and
-            carry on with the questions while they run.
+            {exports.length === 1
+              ? 'This takes a few minutes to prepare, so start it now and carry on with the questions while it runs.'
+              : 'Each of these takes a few minutes to prepare, so start them now and carry on with the questions while they run.'}
           </p>
           <ul className="mt-4 space-y-5">
-            {[...granted].map((source) => (
-              <li key={source}>
+            {exports.map((item) => (
+              <li key={item.url}>
                 <div className="flex flex-wrap items-center gap-3">
                   <a
-                    href={EXPORT_URLS[source]}
+                    href={item.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    onClick={() => setOpened((prev) => new Set(prev).add(source))}
+                    onClick={() =>
+                      setOpened((prev) => new Set(prev).add(item.url))
+                    }
                     className="rounded-md bg-neutral-900 px-3.5 py-2 text-sm font-medium text-white"
                   >
-                    {opened.has(source) ? 'Open again' : 'Request'}{' '}
-                    {SOURCE_LABELS[source]}
+                    {opened.has(item.url) ? 'Open again' : 'Request'} your{' '}
+                    {item.name} data
                   </a>
-                  {confirmed.has(source) && (
+                  {confirmed.has(item.url) && (
                     <span className="text-xs font-medium text-green-700">
                       Confirmed
                     </span>
                   )}
                 </div>
-                {REQUEST_HINTS[source] && !confirmed.has(source) && (
+                {item.groups.length > 1 && (
+                  <p className="mt-2 text-xs text-neutral-600">
+                    One download covers{' '}
+                    {item.groups.map((g) => g.label).join(' and ')}.
+                  </p>
+                )}
+                {REQUEST_HINTS[item.name] && !confirmed.has(item.url) && (
                   <ol className="mt-2 ml-1 list-inside list-decimal space-y-1 text-xs leading-relaxed text-neutral-600">
-                    {REQUEST_HINTS[source].map((step) => (
+                    {REQUEST_HINTS[item.name].map((step) => (
                       <li key={step}>{step}</li>
                     ))}
                   </ol>
@@ -215,18 +251,16 @@ export default function ConsentAndRequest({
             it again and follow the steps above.
           </p>
           <ul className="mt-4 space-y-2">
-            {awaitingConfirmation.map((source) => (
-              <li key={source}>
+            {awaitingConfirmation.map((item) => (
+              <li key={item.url}>
                 <label className="flex cursor-pointer items-center gap-3 text-sm">
                   <input
                     type="checkbox"
                     onChange={() =>
-                      setConfirmed((prev) => new Set(prev).add(source))
+                      setConfirmed((prev) => new Set(prev).add(item.url))
                     }
                   />
-                  <span>
-                    I started my {SOURCE_LABELS[source]} export
-                  </span>
+                  <span>I started my {item.name} export</span>
                 </label>
               </li>
             ))}
@@ -238,7 +272,7 @@ export default function ConsentAndRequest({
         <button
           type="button"
           disabled={!anyGranted || !understood || !allConfirmed}
-          onClick={() => onContinue([...granted])}
+          onClick={() => onContinue(grantedSources())}
           className="rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white disabled:opacity-40"
         >
           Continue to the questions

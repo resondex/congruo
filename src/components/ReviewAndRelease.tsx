@@ -4,11 +4,16 @@
  * Review and release.
  *
  * The respondent picks their export, it is parsed here in the browser, and
- * they decide item by item what we may keep. Only released records leave the
- * device. See CLAUDE.md invariants 1 and 5.
+ * they decide what we may keep. Only released records leave the device. See
+ * CLAUDE.md invariants 1 and 5.
  *
- * Used by both modes: on its own for a full-service study, and inside
- * /capture/release when the interview is running on someone else's platform.
+ * Structured around the fact that a real archive is thousands of records. A
+ * flat checkbox list is not review - nobody reads 3,573 rows, and a screen
+ * that implies they did is worse than one that admits they did not. So the
+ * unit of decision is the source: how many, over what period, in or out. Under
+ * that sits a search box that acts on everything it matches, which is the only
+ * redaction tool that works at this size, and under that the individual
+ * records, always reachable and never the thing you must get through.
  */
 
 import { useCallback, useMemo, useState } from 'react'
@@ -31,7 +36,7 @@ interface Props {
   respondentId?: string
   /**
    * Full-service only. Append mode joins on the referring platform's
-   * respondent id instead, which arrives on both hops.
+   * respondent id, which arrives on both hops.
    */
   sessionId?: string
   window?: { from?: Date; to?: Date }
@@ -55,6 +60,9 @@ interface Receipt {
   latest: string | null
 }
 
+/** How many records a source shows before asking to show more. */
+const PAGE = 50
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, {
     year: 'numeric',
@@ -74,6 +82,18 @@ function domainOf(url: string) {
   }
 }
 
+const matches = (record: ReviewedRecord, term: string) => {
+  const needle = term.trim().toLowerCase()
+  if (!needle) return true
+  return (
+    record.text.toLowerCase().includes(needle) ||
+    (record.context?.toLowerCase().includes(needle) ?? false) ||
+    // Searching answers too: someone redacting "insurance" means the topic,
+    // and the topic is often only named in what the AI said back.
+    (record.answer?.toLowerCase().includes(needle) ?? false)
+  )
+}
+
 export default function ReviewAndRelease({
   studySlug,
   respondentId,
@@ -88,7 +108,11 @@ export default function ReviewAndRelease({
   const [busy, setBusy] = useState(false)
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+
+  const [openSources, setOpenSources] = useState<Set<SourceKind>>(new Set())
+  const [filters, setFilters] = useState<Record<string, string>>({})
+  const [limits, setLimits] = useState<Record<string, number>>({})
+  const [openAnswers, setOpenAnswers] = useState<Set<string>>(new Set())
 
   const onPick = useCallback(
     async (file: File) => {
@@ -111,7 +135,11 @@ export default function ReviewAndRelease({
     [studyWindow, allowedSources]
   )
 
-  const grouped = useMemo(() => {
+  /**
+   * Records are already newest-first from the parser, so the first and last of
+   * a group are its date range without scanning.
+   */
+  const groups = useMemo(() => {
     if (!records) return []
     const bySource = new Map<SourceKind, ReviewedRecord[]>()
     for (const record of records) {
@@ -119,7 +147,16 @@ export default function ReviewAndRelease({
       list.push(record)
       bySource.set(record.source, list)
     }
-    return [...bySource.entries()]
+    return [...bySource.entries()].map(([source, items]) => ({
+      source,
+      items,
+      kept: items.filter((r) => !r.withheld).length,
+      answers: items.filter((r) => r.answer).length,
+      answersKept: items.filter((r) => r.answer && !r.withheldAnswer && !r.withheld)
+        .length,
+      latest: items[0]?.timestamp,
+      earliest: items[items.length - 1]?.timestamp,
+    }))
   }, [records])
 
   const kept = records?.filter((r) => !r.withheld) ?? []
@@ -128,38 +165,47 @@ export default function ReviewAndRelease({
   const answersKept = kept.filter((r) => r.answer && !r.withheldAnswer).length
   const answersTotal = records?.filter((r) => r.answer).length ?? 0
 
-  const toggle = (id: string) =>
+  const update = (
+    predicate: (r: ReviewedRecord) => boolean,
+    change: (r: ReviewedRecord) => ReviewedRecord
+  ) =>
     setRecords((prev) =>
-      prev
-        ? prev.map((r) => (r.id === id ? { ...r, withheld: !r.withheld } : r))
-        : prev
+      prev ? prev.map((r) => (predicate(r) ? change(r) : r)) : prev
+    )
+
+  const toggle = (id: string) =>
+    update(
+      (r) => r.id === id,
+      (r) => ({ ...r, withheld: !r.withheld })
     )
 
   const toggleAnswer = (id: string) =>
-    setRecords((prev) =>
-      prev
-        ? prev.map((r) =>
-            r.id === id ? { ...r, withheldAnswer: !r.withheldAnswer } : r
-          )
-        : prev
+    update(
+      (r) => r.id === id,
+      (r) => ({ ...r, withheldAnswer: !r.withheldAnswer })
     )
 
-  const setSourceWithheld = (source: SourceKind, withheld: boolean) =>
-    setRecords((prev) =>
-      prev
-        ? prev.map((r) => (r.source === source ? { ...r, withheld } : r))
-        : prev
-    )
+  const setWithheld = (
+    predicate: (r: ReviewedRecord) => boolean,
+    withheld: boolean
+  ) => update(predicate, (r) => ({ ...r, withheld }))
 
   const setAllAnswersWithheld = (withheld: boolean) =>
-    setRecords((prev) =>
-      prev
-        ? prev.map((r) => (r.answer ? { ...r, withheldAnswer: withheld } : r))
-        : prev
+    update(
+      (r) => !!r.answer,
+      (r) => ({ ...r, withheldAnswer: withheld })
     )
 
-  const toggleExpanded = (id: string) =>
-    setExpanded((prev) => {
+  const toggleOpen = (source: SourceKind) =>
+    setOpenSources((prev) => {
+      const next = new Set(prev)
+      if (next.has(source)) next.delete(source)
+      else next.add(source)
+      return next
+    })
+
+  const toggleOpenAnswer = (id: string) =>
+    setOpenAnswers((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -170,14 +216,16 @@ export default function ReviewAndRelease({
   const payloadFor = (list: ReviewedRecord[]) =>
     list
       .filter((r) => !r.withheld)
-      .map(({ source, timestamp, text, context, answer, citations, withheldAnswer }) => ({
-        source,
-        timestamp,
-        text,
-        context,
-        answer: withheldAnswer ? undefined : answer,
-        citations: withheldAnswer ? undefined : citations,
-      }))
+      .map(
+        ({ source, timestamp, text, context, answer, citations, withheldAnswer }) => ({
+          source,
+          timestamp,
+          text,
+          context,
+          answer: withheldAnswer ? undefined : answer,
+          citations: withheldAnswer ? undefined : citations,
+        })
+      )
 
   /**
    * A respondent who gets this far and says no is a valid, retained outcome,
@@ -219,9 +267,7 @@ export default function ReviewAndRelease({
         headers: { 'content-type': 'application/json' },
         // The session is resolved server-side from these, and is always
         // checked against the study, so neither key can reach another
-        // study's fielding. There is no auth anywhere in this flow - a
-        // respondent arrives from a link - so this identifies a row rather
-        // than authorising anything.
+        // study's fielding.
         body: JSON.stringify({
           studySlug,
           respondentId,
@@ -256,11 +302,15 @@ export default function ReviewAndRelease({
         <dl className="mt-8 divide-y divide-neutral-200 border-y border-neutral-200 text-sm">
           <div className="flex justify-between py-3">
             <dt className="text-neutral-600">Records released</dt>
-            <dd className="font-medium tabular-nums">{receipt.releasedCount}</dd>
+            <dd className="font-medium tabular-nums">
+              {receipt.releasedCount.toLocaleString()}
+            </dd>
           </div>
           <div className="flex justify-between py-3">
             <dt className="text-neutral-600">Records you held back</dt>
-            <dd className="font-medium tabular-nums">{receipt.withheldCount}</dd>
+            <dd className="font-medium tabular-nums">
+              {receipt.withheldCount.toLocaleString()}
+            </dd>
           </div>
           {answersTotal > 0 && (
             <div className="flex justify-between py-3">
@@ -342,12 +392,29 @@ export default function ReviewAndRelease({
 
       {records && records.length > 0 && (
         <>
-          <p className="mt-8 text-sm text-neutral-600">
-            Found <strong className="tabular-nums">{records.length}</strong>{' '}
-            items. Releasing{' '}
-            <strong className="tabular-nums">{releasedCount}</strong>, holding
-            back <strong className="tabular-nums">{withheldCount}</strong>.
-          </p>
+          <div className="mt-8 rounded-lg border border-neutral-200 bg-neutral-50 p-5">
+            <p className="text-sm text-neutral-700">
+              Your file holds{' '}
+              <strong className="tabular-nums">
+                {records.length.toLocaleString()}
+              </strong>{' '}
+              items across{' '}
+              <strong className="tabular-nums">{groups.length}</strong>{' '}
+              {groups.length === 1 ? 'kind' : 'kinds'} of activity.
+            </p>
+            <p className="mt-1 text-sm text-neutral-600">
+              Sending{' '}
+              <strong className="tabular-nums">
+                {releasedCount.toLocaleString()}
+              </strong>
+              , holding back{' '}
+              <strong className="tabular-nums">
+                {withheldCount.toLocaleString()}
+              </strong>
+              . Decide a whole kind at once, search within it, or open it up and
+              go item by item.
+            </p>
+          </div>
 
           {answersTotal > 0 && (
             <div className="mt-6 rounded-lg border border-neutral-900 bg-white p-5">
@@ -356,8 +423,7 @@ export default function ReviewAndRelease({
               </h2>
               <p className="mt-1 max-w-prose text-sm text-neutral-600">
                 These are the longest thing you would be sharing - full answers,
-                sometimes several hundred words. Open any of them below to read
-                what it says before you decide. You can share the question you
+                sometimes several hundred words. You can share the question you
                 asked while holding back the answer.
               </p>
               <p className="mt-3 text-sm">
@@ -384,130 +450,313 @@ export default function ReviewAndRelease({
             </div>
           )}
 
-          {grouped.map(([source, items]) => (
-            <div key={source} className="mt-8">
-              <div className="flex items-baseline justify-between border-b border-neutral-200 pb-2">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-500">
-                  {SOURCE_LABELS[source]}{' '}
-                  <span className="tabular-nums">({items.length})</span>
-                </h2>
-                <div className="flex gap-3 text-xs">
-                  <button
-                    type="button"
-                    className="text-neutral-500 underline hover:text-neutral-900"
-                    onClick={() => setSourceWithheld(source, true)}
-                  >
-                    Hold back all
-                  </button>
-                  <button
-                    type="button"
-                    className="text-neutral-500 underline hover:text-neutral-900"
-                    onClick={() => setSourceWithheld(source, false)}
-                  >
-                    Include all
-                  </button>
-                </div>
-              </div>
-              <ul className="divide-y divide-neutral-100">
-                {items.map((record) => {
-                  const isOpen = expanded.has(record.id)
-                  return (
-                    <li key={record.id} className="py-2.5 text-sm">
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="checkbox"
-                          className="mt-1"
-                          checked={!record.withheld}
-                          onChange={() => toggle(record.id)}
-                          aria-label={`Include: ${record.text.slice(0, 60)}`}
-                        />
-                        <span className="flex-1">
-                          <span
-                            className={
-                              record.withheld
-                                ? 'text-neutral-400 line-through'
-                                : undefined
-                            }
-                          >
-                            {record.text}
-                          </span>
-                          <span className="mt-0.5 block text-xs text-neutral-400">
-                            {formatDate(record.timestamp)}
-                            {record.context ? ` · ${record.context}` : ''}
-                          </span>
-                        </span>
+          <div className="mt-8 space-y-4">
+            {groups.map((group) => {
+              const isOpen = openSources.has(group.source)
+              const filter = filters[group.source] ?? ''
+              const limit = limits[group.source] ?? PAGE
+              const filtered = filter
+                ? group.items.filter((r) => matches(r, filter))
+                : group.items
+              const shown = filtered.slice(0, limit)
+              const allOut = group.kept === 0
+              const someOut = group.kept < group.items.length
+
+              return (
+                <div
+                  key={group.source}
+                  className={`rounded-lg border transition ${
+                    allOut ? 'border-neutral-200 bg-neutral-50' : 'border-neutral-300'
+                  }`}
+                >
+                  <div className="p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h2 className="font-medium">
+                          {SOURCE_LABELS[group.source]}
+                        </h2>
+                        <p className="mt-1 text-sm text-neutral-600">
+                          <span className="tabular-nums">
+                            {group.items.length.toLocaleString()}
+                          </span>{' '}
+                          {group.items.length === 1 ? 'item' : 'items'}
+                          {group.earliest && group.latest && (
+                            <>
+                              {' · '}
+                              {formatDate(group.earliest)} to{' '}
+                              {formatDate(group.latest)}
+                            </>
+                          )}
+                          {group.answers > 0 && (
+                            <>
+                              {' · '}
+                              <span className="tabular-nums">
+                                {group.answers}
+                              </span>{' '}
+                              with AI answers
+                            </>
+                          )}
+                        </p>
+                        {someOut && (
+                          <p className="mt-1 text-sm font-medium text-neutral-900">
+                            {allOut ? (
+                              'Holding all of these back'
+                            ) : (
+                              <>
+                                Sending{' '}
+                                <span className="tabular-nums">
+                                  {group.kept.toLocaleString()}
+                                </span>{' '}
+                                of{' '}
+                                <span className="tabular-nums">
+                                  {group.items.length.toLocaleString()}
+                                </span>
+                              </>
+                            )}
+                          </p>
+                        )}
                       </div>
 
-                      {record.answer && !record.withheld && (
-                        <div className="ml-7 mt-2 rounded-md border border-neutral-200 bg-neutral-50">
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
-                            <span className="text-xs font-medium text-neutral-700">
-                              The AI answered ·{' '}
-                              <span className="tabular-nums">
-                                {wordCount(record.answer)}
-                              </span>{' '}
-                              words
-                              {record.citations?.length
-                                ? ` · ${record.citations.length} source${
-                                    record.citations.length === 1 ? '' : 's'
-                                  }`
-                                : ''}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => toggleExpanded(record.id)}
-                              className="text-xs text-neutral-600 underline hover:text-neutral-900"
-                            >
-                              {isOpen ? 'Hide' : 'Read it'}
-                            </button>
-                            <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-neutral-700">
-                              <input
-                                type="checkbox"
-                                checked={!record.withheldAnswer}
-                                onChange={() => toggleAnswer(record.id)}
-                              />
-                              Share this answer
-                            </label>
-                          </div>
+                      <div className="flex shrink-0 gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setWithheld((r) => r.source === group.source, allOut)
+                          }
+                          className={`rounded-md border px-3 py-1.5 text-sm font-medium transition ${
+                            allOut
+                              ? 'border-neutral-300 hover:border-neutral-500'
+                              : 'border-neutral-900 bg-neutral-900 text-white'
+                          }`}
+                        >
+                          {allOut ? 'Include these' : 'Sending'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setWithheld((r) => r.source === group.source, true)
+                          }
+                          disabled={allOut}
+                          className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm transition hover:border-neutral-500 disabled:opacity-30"
+                        >
+                          Hold back
+                        </button>
+                      </div>
+                    </div>
 
-                          {isOpen && (
-                            <div className="border-t border-neutral-200 px-3 py-3">
-                              {/*
-                                Expands in the page flow rather than inside its
-                                own scroll box. A nested scroller on a phone
-                                traps the page scroll and is where someone stops
-                                reading - which would defeat the reason the
-                                answer is shown at all. Collapsed by default is
-                                what keeps a long list manageable.
-                              */}
-                              <p className="whitespace-pre-wrap text-xs leading-relaxed text-neutral-700">
-                                {record.answer}
-                              </p>
-                              {record.citations?.length ? (
-                                <p className="mt-3 border-t border-neutral-200 pt-2 text-xs text-neutral-500">
-                                  Sources it cited:{' '}
-                                  {[
-                                    ...new Set(record.citations.map(domainOf)),
-                                  ].join(', ')}
-                                </p>
-                              ) : null}
-                            </div>
-                          )}
+                    <button
+                      type="button"
+                      onClick={() => toggleOpen(group.source)}
+                      className="mt-3 text-sm text-neutral-600 underline hover:text-neutral-900"
+                    >
+                      {isOpen
+                        ? 'Hide these'
+                        : `Search or go through ${
+                            group.items.length === 1 ? 'it' : 'them'
+                          } one by one`}
+                    </button>
+                  </div>
 
-                          {record.withheldAnswer && (
-                            <p className="border-t border-neutral-200 px-3 py-2 text-xs text-neutral-500">
-                              Held back. We will receive your question but not
-                              this answer.
-                            </p>
+                  {isOpen && (
+                    <div className="border-t border-neutral-200 p-5">
+                      <input
+                        type="search"
+                        value={filter}
+                        placeholder={`Search these ${group.items.length.toLocaleString()} items`}
+                        onChange={(event) =>
+                          setFilters((prev) => ({
+                            ...prev,
+                            [group.source]: event.target.value,
+                          }))
+                        }
+                        className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
+                      />
+
+                      {/*
+                        Acting on everything a search matches is the only
+                        redaction that works at this size. Going item by item
+                        through four thousand rows is not something anyone will
+                        do, and a screen that only offers that is really
+                        offering nothing.
+                      */}
+                      {filter.trim() && (
+                        <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md bg-neutral-50 px-3 py-2 text-sm">
+                          <span className="text-neutral-600">
+                            <strong className="tabular-nums">
+                              {filtered.length.toLocaleString()}
+                            </strong>{' '}
+                            {filtered.length === 1 ? 'match' : 'matches'}
+                          </span>
+                          {filtered.length > 0 && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setWithheld(
+                                    (r) =>
+                                      r.source === group.source &&
+                                      matches(r, filter),
+                                    true
+                                  )
+                                }
+                                className="ml-auto rounded-md border border-neutral-300 px-3 py-1 text-xs font-medium hover:border-neutral-500"
+                              >
+                                Hold back all matches
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setWithheld(
+                                    (r) =>
+                                      r.source === group.source &&
+                                      matches(r, filter),
+                                    false
+                                  )
+                                }
+                                className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-medium hover:border-neutral-500"
+                              >
+                                Include all matches
+                              </button>
+                            </>
                           )}
                         </div>
                       )}
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          ))}
+
+                      {filtered.length === 0 ? (
+                        <p className="mt-4 text-sm text-neutral-500">
+                          Nothing here matches that.
+                        </p>
+                      ) : (
+                        <>
+                          <ul className="mt-2 divide-y divide-neutral-100">
+                            {shown.map((record) => {
+                              const answerOpen = openAnswers.has(record.id)
+                              return (
+                                <li key={record.id} className="py-2.5 text-sm">
+                                  <div className="flex items-start gap-3">
+                                    <input
+                                      type="checkbox"
+                                      className="mt-1"
+                                      checked={!record.withheld}
+                                      onChange={() => toggle(record.id)}
+                                      aria-label={`Include: ${record.text.slice(0, 60)}`}
+                                    />
+                                    <span className="flex-1">
+                                      <span
+                                        className={
+                                          record.withheld
+                                            ? 'text-neutral-400 line-through'
+                                            : undefined
+                                        }
+                                      >
+                                        {record.text}
+                                      </span>
+                                      <span className="mt-0.5 block text-xs text-neutral-400">
+                                        {formatDate(record.timestamp)}
+                                        {record.context ? ` · ${record.context}` : ''}
+                                      </span>
+                                    </span>
+                                  </div>
+
+                                  {record.answer && !record.withheld && (
+                                    <div className="ml-7 mt-2 rounded-md border border-neutral-200 bg-neutral-50">
+                                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2">
+                                        <span className="text-xs font-medium text-neutral-700">
+                                          The AI answered ·{' '}
+                                          <span className="tabular-nums">
+                                            {wordCount(record.answer)}
+                                          </span>{' '}
+                                          words
+                                          {record.citations?.length
+                                            ? ` · ${record.citations.length} source${
+                                                record.citations.length === 1
+                                                  ? ''
+                                                  : 's'
+                                              }`
+                                            : ''}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          onClick={() => toggleOpenAnswer(record.id)}
+                                          className="text-xs text-neutral-600 underline hover:text-neutral-900"
+                                        >
+                                          {answerOpen ? 'Hide' : 'Read it'}
+                                        </button>
+                                        <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-neutral-700">
+                                          <input
+                                            type="checkbox"
+                                            checked={!record.withheldAnswer}
+                                            onChange={() => toggleAnswer(record.id)}
+                                          />
+                                          Share this answer
+                                        </label>
+                                      </div>
+
+                                      {answerOpen && (
+                                        <div className="border-t border-neutral-200 px-3 py-3">
+                                          {/*
+                                            Expands in the page flow rather than
+                                            inside its own scroll box. A nested
+                                            scroller on a phone traps the page
+                                            scroll and is where someone stops
+                                            reading - which would defeat the
+                                            reason the answer is shown at all.
+                                          */}
+                                          <p className="whitespace-pre-wrap text-xs leading-relaxed text-neutral-700">
+                                            {record.answer}
+                                          </p>
+                                          {record.citations?.length ? (
+                                            <p className="mt-3 border-t border-neutral-200 pt-2 text-xs text-neutral-500">
+                                              Sources it cited:{' '}
+                                              {[
+                                                ...new Set(
+                                                  record.citations.map(domainOf)
+                                                ),
+                                              ].join(', ')}
+                                            </p>
+                                          ) : null}
+                                        </div>
+                                      )}
+
+                                      {record.withheldAnswer && (
+                                        <p className="border-t border-neutral-200 px-3 py-2 text-xs text-neutral-500">
+                                          Held back. We will receive your question
+                                          but not this answer.
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </li>
+                              )
+                            })}
+                          </ul>
+
+                          {filtered.length > shown.length && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setLimits((prev) => ({
+                                  ...prev,
+                                  [group.source]: limit + PAGE,
+                                }))
+                              }
+                              className="mt-4 w-full rounded-md border border-neutral-300 py-2 text-sm hover:border-neutral-500"
+                            >
+                              Show {Math.min(PAGE, filtered.length - shown.length)}{' '}
+                              more of{' '}
+                              <span className="tabular-nums">
+                                {(filtered.length - shown.length).toLocaleString()}
+                              </span>
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
 
           {error && (
             <p className="mt-6 rounded-md bg-red-50 px-4 py-3 text-sm text-red-900">
@@ -522,7 +771,7 @@ export default function ReviewAndRelease({
               onClick={() => void release()}
               className="rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white disabled:opacity-50"
             >
-              Release {releasedCount} items
+              Release {releasedCount.toLocaleString()} items
               {answersTotal > 0 ? ` and ${answersKept} answers` : ''}
             </button>
             {returnTo && (
