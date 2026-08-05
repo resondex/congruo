@@ -27,6 +27,7 @@ import {
   ActivityRecord,
   SourceKind,
   classifyAction,
+  normaliseAnswer,
   normaliseText,
   recordId,
 } from '../records'
@@ -208,17 +209,13 @@ export function extractAnswer(markup: string): {
     if (/^https?:/i.test(url) && !citations.includes(url)) citations.push(url)
   }
 
-  const answer = decodeEntities(
-    markup
-      .replace(/<(br|\/p|\/li|\/h[1-6]|\/div|\/pre)\b[^>]*>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ')
+  const answer = normaliseAnswer(
+    decodeEntities(
+      markup
+        .replace(/<(br|\/p|\/li|\/h[1-6]|\/div|\/pre)\b[^>]*>/gi, '\n')
+        .replace(/<[^>]+>/g, ' ')
+    )
   )
-    .replace(/[^\S\n]+/g, ' ')
-    .replace(/\n{2,}/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join('\n')
 
   return {
     answer: answer || undefined,

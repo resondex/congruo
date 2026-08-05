@@ -41,7 +41,15 @@ Anyone working on the parsers will have their own real Takeout archive and
 `.gitignore` covers the common paths; do not weaken it, and do not commit a real
 export as a fixture.
 
-**5. Respondents authenticate in their own browser session.**
+**5. AI answers are collected; the respondent must be able to see them.**
+
+Records from AI-mediated sources carry the answer the respondent was shown
+and the sources it cited - that is the measurement a client is buying, not a
+by-product. It is also the largest single thing we ask anyone to hand over, so
+the review step has to render it. A 2,000-word answer behind a checkbox nobody
+opened is not consent.
+
+**6. Respondents authenticate in their own browser session.**
 
 Export requests are ordinary links out to the vendor. Never embed a vendor login
 in a WebView or in-app browser we control - that hands us their session, which
