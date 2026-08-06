@@ -105,9 +105,15 @@ export async function currentUser(): Promise<User | null> {
   if (!rows.length) return null
 
   const row = rows[0]
+  // Both stamps, and not awaited: the session's is for spotting a stale
+  // cookie, the user's is what the People page shows. Updating only the first
+  // meant every account read "never seen" forever.
   void db()`
     update auth_sessions set last_seen_at = now()
     where token_hash = ${tokenHash(token)}
+  `.catch(() => {})
+  void db()`
+    update users set last_seen_at = now() where id = ${row.id}
   `.catch(() => {})
 
   return {
