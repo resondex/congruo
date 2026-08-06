@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "migrate": "node --env-file=.env.local scripts/migrate.mjs",
-    "inspect": "esbuild src/lib/parsers/index.ts --bundle --format=esm --platform=node --outfile=.inspect/parsers.mjs --log-level=error && node scripts/inspect-takeout.mjs"
+    "inspect": "esbuild src/lib/parsers/index.ts --bundle --format=esm --platform=node --outfile=.inspect/parsers.mjs --log-level=error && node scripts/inspect-takeout.mjs",
+    "create-user": "esbuild src/lib/password.ts --bundle --format=esm --platform=node --outfile=.auth/password.mjs --log-level=error && node --env-file=.env.local scripts/create-user.mjs",
+    "create-org": "node --env-file=.env.local scripts/create-org.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",

@@ -50,3 +50,4 @@ Thumbs.db
 # Local inspection output; never committed.
 .inspect/
 *.records.json
+.auth/
