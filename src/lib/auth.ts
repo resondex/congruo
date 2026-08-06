@@ -2,6 +2,7 @@ import 'server-only'
 import { cache } from 'react'
 import { randomBytes, createHash } from 'node:crypto'
 import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
 import { db, dbConfigured } from './db'
 import { hashPassword, verifyPassword } from './password'
 
@@ -150,8 +151,17 @@ export function canSeeOrg(user: User, orgId: string | null): boolean {
   return orgId === user.orgId
 }
 
+/**
+ * The signed-in user, or a redirect to sign in.
+ *
+ * redirect() and not a thrown Error. The layout guards too, and both render at
+ * once: a plain throw here aborted the stream the layout was already writing,
+ * which the server reported as "the destination stream closed early" and the
+ * browser showed as a page that never finished loading. redirect() throws a
+ * signal Next understands instead, so the two agree on where to go.
+ */
 export async function requireUser(): Promise<User> {
   const user = await currentUser()
-  if (!user) throw new Error('Not signed in.')
+  if (!user) redirect('/login')
   return user
 }
