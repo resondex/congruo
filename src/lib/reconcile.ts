@@ -17,6 +17,22 @@ import type { SourceKind } from './records'
 import { SOURCE_LABELS } from './records'
 import type { AnswerValue, Claim, Question } from './survey'
 
+/**
+ * What the chosen options mean, rather than what they are numbered.
+ *
+ * Codes are the analysis key and say nothing on their own; `mapsTo` is where
+ * an option records that it stands for Google AI Mode or for "yes". Resolving
+ * here keeps the comparison logic below reading in meanings, and keeps the one
+ * place that knows about codes down to this function.
+ */
+function meaningsOf(question: Question, answer: AnswerValue): string[] {
+  if (answer.kind !== 'codes') return []
+  const byCode = new Map(question.options.map((o) => [o.code, o.mapsTo]))
+  return answer.codes
+    .map((code) => byCode.get(code))
+    .filter((m): m is string => Boolean(m))
+}
+
 export interface ObservedRecord {
   source: SourceKind
   occurredAt: string
@@ -145,18 +161,19 @@ export function reconcile(input: ReconcileInput): Comparison[] {
 
     switch (claim.kind) {
       case 'source_use': {
-        if (answer.kind !== 'choices') continue
+        if (answer.kind !== 'codes') continue
+        const chosen = meaningsOf(question, answer)
 
         // Only sources this respondent granted are comparable. One they never
         // consented to share could not appear in the records whatever they
         // did, and holding that against their answer would be nonsense.
         const comparable = question.options
-          .map((o) => o.value as SourceKind)
-          .filter((v) => input.grantedSources.includes(v))
+          .map((o) => o.mapsTo as SourceKind)
+          .filter((v) => v && input.grantedSources.includes(v))
         if (!comparable.length) continue
 
         const said = new Set(
-          answer.values.filter((v) => comparable.includes(v as SourceKind))
+          chosen.filter((v) => comparable.includes(v as SourceKind))
         )
         const seen = new Set(
           records.map((r) => r.source).filter((s) => comparable.includes(s))
@@ -165,7 +182,7 @@ export function reconcile(input: ReconcileInput): Comparison[] {
         const saidNotSeen = [...said].filter((s) => !seen.has(s as SourceKind))
         const seenNotSaid = [...seen].filter((s) => !said.has(s))
 
-        const label = (s: string) => SOURCE_LABELS[s as SourceKind] ?? s
+        const label = (s: unknown) => SOURCE_LABELS[s as SourceKind] ?? String(s)
         if (saidNotSeen.length && !records.length) caveats.push('source_absent')
 
         out.push({
@@ -206,7 +223,7 @@ export function reconcile(input: ReconcileInput): Comparison[] {
       }
 
       case 'topic_search': {
-        if (answer.kind !== 'choice') continue
+        if (answer.kind !== 'codes') continue
 
         const hits = records.filter(
           (r) =>
@@ -220,7 +237,9 @@ export function reconcile(input: ReconcileInput): Comparison[] {
           caveats.push('short_coverage')
         }
 
-        const saidYes = answer.value === 'yes'
+        // "Yes" is whichever option was bound to it, not a particular code:
+        // an author is free to number their options however they like.
+        const saidYes = meaningsOf(question, answer).includes('yes')
         out.push({
           questionCode: question.code,
           prompt: question.prompt,

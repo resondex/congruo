@@ -32,7 +32,11 @@ export interface EditableQuestion {
   type: QType
   prompt: string
   help: string | null
-  options: { value: string; label: string }[]
+  options: { code: number; label: string; mapsTo?: string; exclusive?: boolean }[]
+  allowOther: boolean
+  allowPreferNotToSay: boolean
+  minSelections: number | null
+  maxSelections: number | null
   required: boolean
   min: number | null
   max: number | null
@@ -150,7 +154,14 @@ export default function QuestionEditor({
         type: 'single',
         prompt: '',
         help: null,
-        options: [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }],
+        options: [
+          { code: 1, label: 'Yes', mapsTo: 'yes' },
+          { code: 2, label: 'No', mapsTo: 'no' },
+        ],
+        allowOther: false,
+        allowPreferNotToSay: false,
+        minSelections: null,
+        maxSelections: null,
         required: true,
         min: null,
         max: null,
@@ -379,7 +390,7 @@ export default function QuestionEditor({
                     <Options
                       question={q}
                       readOnly={readOnly}
-                      onChange={(options) => change(index, { options })}
+                      onChange={(patch) => change(index, patch)}
                     />
                   )}
 
@@ -511,48 +522,83 @@ function Options({
 }: {
   question: EditableQuestion
   readOnly: boolean
-  onChange: (options: { value: string; label: string }[]) => void
+  onChange: (patch: Partial<EditableQuestion>) => void
 }) {
+  /**
+   * The next code is one past the highest ever used, not the length of the
+   * list. Reusing the code of a deleted option would silently merge two
+   * different answers in the delivered file - last wave's "Bing" becoming this
+   * wave's "Perplexity" under the same column.
+   */
+  const nextCode = () =>
+    question.options.reduce((max, o) => Math.max(max, o.code), 0) + 1
+
   return (
     <div>
       <span className="text-xs font-medium text-neutral-700">Options</span>
       <p className="text-xs text-neutral-500">
-        The value is what lands in the data; the label is what they read. For a
-        question bound to &quot;which services&quot;, use source names as values.
+        The code is what lands in the data and cannot be changed once it exists.
+        The label is what they read and can change whenever the wording needs
+        to. &quot;Means&quot; is only read by reconcile - set it to a source
+        name to bind an option to it.
       </p>
+
       <div className="mt-2 space-y-2">
         {question.options.map((option, i) => (
-          <div key={i} className="flex gap-2">
-            <input
-              disabled={readOnly}
-              value={option.value}
-              placeholder="value"
-              onChange={(e) =>
-                onChange(
-                  question.options.map((o, j) =>
-                    j === i ? { ...o, value: e.target.value } : o
-                  )
-                )
-              }
-              className="w-44 rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
-            />
+          <div key={option.code} className="flex flex-wrap items-center gap-2">
+            <span
+              className="w-10 shrink-0 rounded bg-neutral-100 px-2 py-1.5 text-center text-xs tabular-nums text-neutral-600"
+              title="Fixed once created"
+            >
+              {option.code}
+            </span>
             <input
               disabled={readOnly}
               value={option.label}
               placeholder="what they read"
               onChange={(e) =>
-                onChange(
-                  question.options.map((o, j) =>
+                onChange({
+                  options: question.options.map((o, j) =>
                     j === i ? { ...o, label: e.target.value } : o
-                  )
-                )
+                  ),
+                })
               }
-              className="flex-1 rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
+              className="min-w-40 flex-1 rounded-md border border-neutral-300 px-3 py-1.5 text-sm"
             />
+            <input
+              disabled={readOnly}
+              value={option.mapsTo ?? ''}
+              placeholder="means (optional)"
+              onChange={(e) =>
+                onChange({
+                  options: question.options.map((o, j) =>
+                    j === i ? { ...o, mapsTo: e.target.value || undefined } : o
+                  ),
+                })
+              }
+              className="w-44 rounded-md border border-neutral-200 px-3 py-1.5 text-xs"
+            />
+            <label className="flex items-center gap-1 text-xs text-neutral-600">
+              <input
+                type="checkbox"
+                disabled={readOnly}
+                checked={option.exclusive ?? false}
+                onChange={(e) =>
+                  onChange({
+                    options: question.options.map((o, j) =>
+                      j === i ? { ...o, exclusive: e.target.checked } : o
+                    ),
+                  })
+                }
+              />
+              only
+            </label>
             {!readOnly && (
               <button
                 type="button"
-                onClick={() => onChange(question.options.filter((_, j) => j !== i))}
+                onClick={() =>
+                  onChange({ options: question.options.filter((_, j) => j !== i) })
+                }
                 className="px-2 text-sm text-neutral-400 hover:text-red-700"
               >
                 ×
@@ -561,15 +607,79 @@ function Options({
           </div>
         ))}
       </div>
+
       {!readOnly && (
         <button
           type="button"
-          onClick={() => onChange([...question.options, { value: '', label: '' }])}
+          onClick={() =>
+            onChange({
+              options: [
+                ...question.options,
+                { code: nextCode(), label: '' },
+              ],
+            })
+          }
           className="mt-2 text-xs text-neutral-500 underline hover:text-neutral-900"
         >
           Add an option
         </button>
       )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-4 border-t border-neutral-100 pt-3">
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            disabled={readOnly}
+            checked={question.allowOther}
+            onChange={(e) => onChange({ allowOther: e.target.checked })}
+          />
+          Other, please specify <span className="text-neutral-400">(97)</span>
+        </label>
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            disabled={readOnly}
+            checked={question.allowPreferNotToSay}
+            onChange={(e) => onChange({ allowPreferNotToSay: e.target.checked })}
+          />
+          Prefer not to say <span className="text-neutral-400">(98)</span>
+        </label>
+
+        {question.type === 'multiple' && (
+          <>
+            <label className="flex items-center gap-2 text-xs">
+              at least
+              <input
+                type="number"
+                min={0}
+                disabled={readOnly}
+                value={question.minSelections ?? ''}
+                onChange={(e) =>
+                  onChange({
+                    minSelections: e.target.value ? Number(e.target.value) : null,
+                  })
+                }
+                className="w-16 rounded-md border border-neutral-300 px-2 py-1"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs">
+              at most
+              <input
+                type="number"
+                min={1}
+                disabled={readOnly}
+                value={question.maxSelections ?? ''}
+                onChange={(e) =>
+                  onChange({
+                    maxSelections: e.target.value ? Number(e.target.value) : null,
+                  })
+                }
+                className="w-16 rounded-md border border-neutral-300 px-2 py-1"
+              />
+            </label>
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -698,8 +808,8 @@ function RuleEditor({
                   >
                     <option value="">choose</option>
                     {referenced.options.map((o) => (
-                      <option key={o.value} value={o.value}>
-                        {o.label || o.value}
+                      <option key={o.code} value={o.code}>
+                        {o.label || `option ${o.code}`}
                       </option>
                     ))}
                   </select>

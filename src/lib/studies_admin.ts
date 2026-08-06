@@ -130,7 +130,12 @@ export interface QuestionInput {
   type: 'single' | 'multiple' | 'scale' | 'number' | 'text'
   prompt: string
   help: string | null
-  options: { value: string; label: string }[]
+  options: { code: number; label: string; mapsTo?: string; exclusive?: boolean }[]
+  allowOther: boolean
+  allowPreferNotToSay: boolean
+  minSelections: number | null
+  maxSelections: number | null
+  matrixRows: { code: number; label: string }[] | null
   required: boolean
   min: number | null
   max: number | null
@@ -205,6 +210,11 @@ export async function replaceQuestions(
           prompt: q.prompt,
           help: q.help,
           options: tx.json(q.options),
+          matrix_rows: q.matrixRows ? tx.json(q.matrixRows) : null,
+          allow_other: q.allowOther,
+          allow_prefer_not_to_say: q.allowPreferNotToSay,
+          min_selections: q.minSelections,
+          max_selections: q.maxSelections,
           required: q.required,
           min_value: q.min,
           max_value: q.max,

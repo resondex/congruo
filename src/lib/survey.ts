@@ -15,10 +15,34 @@ import { evaluate, referencedCodes, type Condition } from './conditions'
 
 export type QuestionType = 'single' | 'multiple' | 'scale' | 'number' | 'text'
 
+/**
+ * An option, split into the part that must never move and the part that is
+ * free to.
+ *
+ * `code` is the analysis key. It is assigned once and never edited, so a
+ * column in a delivered file means the same thing in wave two as it did in
+ * wave one. `label` is wording and may change as often as it needs to.
+ * `mapsTo` is a separate binding read only by the claim engine - it is how an
+ * option says "this one means Google AI Mode" without the data file having to
+ * carry that string.
+ */
 export interface QuestionOption {
-  value: string
+  code: number
   label: string
+  mapsTo?: string
+  /** Clears the other selections and is cleared by them. */
+  exclusive?: boolean
 }
+
+/**
+ * Reserved codes, the same in every study so a delivered file reads the same
+ * way across them. Excluded from bases by default.
+ */
+export const OTHER_CODE = 97
+export const PREFER_NOT_CODE = 98
+
+export const isReservedCode = (code: number) =>
+  code === OTHER_CODE || code === PREFER_NOT_CODE
 
 /**
  * What record-side quantity a question is a self-report of.
@@ -54,6 +78,35 @@ export interface Question {
   showIf?: Condition
   /** Ends the interview when this holds, evaluated on leaving the page. */
   terminateIf?: Condition
+
+  /**
+   * The things this question is asked about, one answer per row.
+   *
+   * A matrix is a modifier rather than a family of types: it is the same
+   * question repeated, so the scale is authored once and the renderer is free
+   * to draw a grid on a wide screen and a stacked list on a phone without the
+   * stored answers differing at all.
+   */
+  matrixRows?: QuestionOption[]
+
+  allowOther?: boolean
+  allowPreferNotToSay?: boolean
+  minSelections?: number
+  maxSelections?: number
+}
+
+/** Not a matrix. Row codes start at 1, so 0 can mean "no row". */
+export const NO_ROW = 0
+
+/**
+ * How an answer is keyed while the respondent is working.
+ *
+ * A matrix answer belongs to one row, so the key carries it. Flat keys keep
+ * the client state a plain object and the branching rules addressing whole
+ * questions rather than cells.
+ */
+export function answerKey(code: string, rowCode: number = NO_ROW): string {
+  return rowCode === NO_ROW ? code : `${code}#${rowCode}`
 }
 
 /** One screen. Questions sharing a page number are answered together. */
@@ -68,10 +121,21 @@ export interface Page {
  * unanswered, which is the classic way a survey loses real data.
  */
 export type AnswerValue =
-  | { kind: 'choice'; value: string }
-  | { kind: 'choices'; values: string[] }
+  /**
+   * Selection, as codes. A single choice is one code rather than a separate
+   * shape - the difference between "pick one" and "pick several" is a rule
+   * about how many, not a different kind of answer.
+   *
+   * `text` rides along when code 97 is chosen, which is what "other, please
+   * specify" means: a selection and a verbatim, not one or the other.
+   */
+  | { kind: 'codes'; codes: number[]; text?: string }
   | { kind: 'number'; value: number }
   | { kind: 'text'; value: string }
+  /** Ranking: most preferred first. */
+  | { kind: 'order'; codes: number[] }
+  /** Allocation: option code to quantity. */
+  | { kind: 'allocation'; parts: Record<number, number> }
 
 export type Answers = Record<string, AnswerValue | undefined>
 
@@ -134,8 +198,11 @@ export function pruneAnswers(
 ): Answers {
   const asked = new Set(visibleQuestions(questions, answers).map((q) => q.code))
   const out: Answers = {}
-  for (const [code, value] of Object.entries(answers)) {
-    if (asked.has(code) && value !== undefined) out[code] = value
+  for (const [key, value] of Object.entries(answers)) {
+    // A matrix answer is keyed "question#row"; visibility is a property of the
+    // question, so the row is dropped before the check.
+    const [code] = key.split('#')
+    if (asked.has(code) && value !== undefined) out[key] = value
   }
   return out
 }
@@ -216,29 +283,39 @@ export function validateAnswer(
   }
 
   switch (question.type) {
-    case 'single': {
-      if (answer.kind !== 'choice') return 'Expected a single choice.'
-      if (!question.options.some((o) => o.value === answer.value)) {
-        return 'That is not one of the options.'
-      }
-      return null
-    }
-
+    case 'single':
     case 'multiple': {
-      if (answer.kind !== 'choices') return 'Expected a list of choices.'
-      for (const value of answer.values) {
-        if (!question.options.some((o) => o.value === value)) {
-          return 'That is not one of the options.'
-        }
+      if (answer.kind !== 'codes') return 'Expected a choice.'
+      const offered = new Set(question.options.map((o) => o.code))
+      if (question.allowOther) offered.add(OTHER_CODE)
+      if (question.allowPreferNotToSay) offered.add(PREFER_NOT_CODE)
+
+      for (const code of answer.codes) {
+        if (!offered.has(code)) return 'That is not one of the options.'
       }
-      if (new Set(answer.values).size !== answer.values.length) {
+      if (new Set(answer.codes).size !== answer.codes.length) {
         return 'The same option was chosen twice.'
       }
-      // An empty selection is a real answer to "choose all that apply" only
-      // when the question is optional; otherwise it is a skipped question
-      // wearing a different hat.
-      if (!answer.values.length && question.required) {
-        return 'This one is needed to continue.'
+      if (question.type === 'single' && answer.codes.length > 1) {
+        return 'Only one answer here.'
+      }
+      // "Other" without the words is half an answer, and the half that
+      // carries the meaning is the missing one.
+      if (answer.codes.includes(OTHER_CODE) && !answer.text?.trim()) {
+        return 'Tell us what the other one was.'
+      }
+      if (!answer.codes.length) {
+        return question.required ? 'This one is needed to continue.' : null
+      }
+
+      // Limits ignore "prefer not to say": it is a refusal, not a pick, and
+      // counting it against a minimum would force someone to choose.
+      const picked = answer.codes.filter((c) => c !== PREFER_NOT_CODE).length
+      if (question.minSelections && picked && picked < question.minSelections) {
+        return `Choose at least ${question.minSelections}.`
+      }
+      if (question.maxSelections && picked > question.maxSelections) {
+        return `Choose no more than ${question.maxSelections}.`
       }
       return null
     }

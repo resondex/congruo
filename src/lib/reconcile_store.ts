@@ -14,17 +14,18 @@ interface AnswerRow {
   question_code: string
   value_text: string | null
   value_number: number | null
-  value_choices: string[] | null
+  value_codes: number[] | null
+  value_json: { order?: number[]; parts?: Record<number, number> } | null
 }
 
 /**
  * Rebuilds the answer in the shape the question asked for.
  *
  * The type has to come from the question, not from the stored value. Both
- * `single` and `multiple` land in `value_choices`, so a multi-select with
- * exactly one option ticked is indistinguishable from a radio button by
- * inspection - and reading it as a radio drops it from reconciliation
- * silently, which is how this was found.
+ * `single` and `multiple` land in `value_codes`, so a multi-select with exactly
+ * one option ticked is indistinguishable from a radio button by inspection -
+ * and reading it as a radio once dropped it from reconciliation silently, which
+ * is how that bug was found.
  */
 function toAnswer(row: AnswerRow, type: QuestionType): AnswerValue | undefined {
   switch (type) {
@@ -34,13 +35,14 @@ function toAnswer(row: AnswerRow, type: QuestionType): AnswerValue | undefined {
         ? undefined
         : { kind: 'number', value: row.value_number }
     case 'single':
-      return row.value_choices?.length
-        ? { kind: 'choice', value: row.value_choices[0] }
-        : undefined
     case 'multiple':
-      return row.value_choices === null
+      return row.value_codes === null
         ? undefined
-        : { kind: 'choices', values: row.value_choices }
+        : {
+            kind: 'codes',
+            codes: row.value_codes,
+            text: row.value_text ?? undefined,
+          }
     case 'text':
       return row.value_text === null
         ? undefined
@@ -73,8 +75,12 @@ export async function loadReconcileInput(
     await Promise.all([
       getQuestions(studySlug),
       sql<AnswerRow[]>`
-        select question_code, value_text, value_number, value_choices
-        from survey_answers where session_id = ${sessionId}
+        select question_code, value_text, value_number, value_codes, value_json
+        from survey_answers
+        -- Matrix rows are one comparison each and no claim reads them yet;
+        -- taking only the whole-question answers keeps this honest until one
+        -- does, rather than silently comparing the first row.
+        where session_id = ${sessionId} and row_code = 0
       `,
       sql<{ source: SourceKind; occurred_at: string; text: string }[]>`
         select source, occurred_at, text

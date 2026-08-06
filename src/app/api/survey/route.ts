@@ -23,15 +23,30 @@ import {
 
 function readAnswer(raw: unknown): AnswerValue | null {
   if (typeof raw !== 'object' || raw === null) return null
-  const { kind, value, values } = raw as Record<string, unknown>
+  const { kind, value, codes, text, parts } = raw as Record<string, unknown>
+
+  const allNumbers = (v: unknown): v is number[] =>
+    Array.isArray(v) && v.every((n) => typeof n === 'number' && Number.isFinite(n))
 
   switch (kind) {
-    case 'choice':
-      return typeof value === 'string' ? { kind: 'choice', value } : null
-    case 'choices':
-      return Array.isArray(values) && values.every((v) => typeof v === 'string')
-        ? { kind: 'choices', values: values as string[] }
-        : null
+    case 'codes':
+      if (!allNumbers(codes)) return null
+      return {
+        kind: 'codes',
+        codes,
+        text: typeof text === 'string' ? text : undefined,
+      }
+    case 'order':
+      return allNumbers(codes) ? { kind: 'order', codes } : null
+    case 'allocation': {
+      if (typeof parts !== 'object' || parts === null) return null
+      const out: Record<number, number> = {}
+      for (const [code, amount] of Object.entries(parts)) {
+        if (!Number.isFinite(Number(code)) || typeof amount !== 'number') return null
+        out[Number(code)] = amount
+      }
+      return { kind: 'allocation', parts: out }
+    }
     case 'number':
       return typeof value === 'number' ? { kind: 'number', value } : null
     case 'text':
@@ -90,10 +105,11 @@ export async function POST(request: NextRequest) {
 
   const questions = await getQuestions(studySlug)
   const asked = new Set(questions.map((q) => q.code))
-  for (const code of Object.keys(answers)) {
-    if (!asked.has(code)) {
+  for (const key of Object.keys(answers)) {
+    // A matrix answer arrives as "question#row".
+    if (!asked.has(key.split('#')[0])) {
       return Response.json(
-        { error: `This study does not ask ${code}.` },
+        { error: `This study does not ask ${key}.` },
         { status: 400 }
       )
     }
@@ -101,18 +117,19 @@ export async function POST(request: NextRequest) {
 
   // Read everything first: visibility is decided by the answers themselves, so
   // there is nothing to branch on until they are parsed.
+  // Keyed by whatever arrived, so matrix rows survive; validation below reads
+  // the question code out of the key.
   const submitted: Answers = {}
-  for (const question of questions) {
-    const raw = (answers as Record<string, unknown>)[question.code]
+  for (const [key, raw] of Object.entries(answers as Record<string, unknown>)) {
     if (raw === undefined || raw === null) continue
     const answer = readAnswer(raw)
     if (!answer) {
       return Response.json(
-        { error: `Could not read the answer to ${question.code}.` },
+        { error: `Could not read the answer to ${key}.` },
         { status: 400 }
       )
     }
-    submitted[question.code] = answer
+    submitted[key] = answer
   }
 
   // Answers to questions this respondent's route never reached are dropped
@@ -127,12 +144,18 @@ export async function POST(request: NextRequest) {
 
   // Only what they were actually shown is required of them.
   for (const question of visibleQuestions(questions, parsed)) {
-    const problem = validateAnswer(question, parsed[question.code])
-    if (problem) {
-      return Response.json(
-        { error: `${question.code}: ${problem}`, question: question.code },
-        { status: 400 }
-      )
+    // A matrix is validated per row; a plain question has the one key.
+    const keys = question.matrixRows?.length
+      ? question.matrixRows.map((r) => `${question.code}#${r.code}`)
+      : [question.code]
+    for (const key of keys) {
+      const problem = validateAnswer(question, parsed[key])
+      if (problem) {
+        return Response.json(
+          { error: `${question.code}: ${problem}`, question: question.code },
+          { status: 400 }
+        )
+      }
     }
   }
 

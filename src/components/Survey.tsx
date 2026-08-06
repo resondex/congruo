@@ -20,9 +20,12 @@ import {
   terminatedBy,
   validateAnswer,
   MAX_TEXT_ANSWER,
+  OTHER_CODE,
+  PREFER_NOT_CODE,
   type AnswerValue,
   type Answers,
   type Question,
+  type QuestionOption,
 } from '@/lib/survey'
 
 interface Props {
@@ -198,49 +201,37 @@ function Field({
   answer: AnswerValue | undefined
   onAnswer: (value: AnswerValue | undefined) => void
 }) {
+  // "Other" and "Prefer not to say" are appended rather than authored, so their
+  // codes mean the same thing in every study and a delivered file reads the
+  // same way across them.
+  const offered: QuestionOption[] = [
+    ...question.options,
+    ...(question.allowOther
+      ? [{ code: OTHER_CODE, label: 'Other, please specify' }]
+      : []),
+    ...(question.allowPreferNotToSay
+      ? [{ code: PREFER_NOT_CODE, label: 'Prefer not to say' }]
+      : []),
+  ]
+  const chosen = answer?.kind === 'codes' ? answer.codes : []
+  const otherText = answer?.kind === 'codes' ? (answer.text ?? '') : ''
+
+  const setCodes = (codes: number[], text?: string) =>
+    codes.length || text
+      ? onAnswer({ kind: 'codes', codes, text })
+      : onAnswer(undefined)
+
   switch (question.type) {
     case 'single':
-      return (
-        <div className="space-y-2">
-          {question.options.map((option) => {
-            const chosen = answer?.kind === 'choice' && answer.value === option.value
-            return (
-              <label
-                key={option.value}
-                className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-3 transition ${
-                  chosen
-                    ? 'border-neutral-900 bg-neutral-50'
-                    : 'border-neutral-200 hover:border-neutral-400'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name={question.code}
-                  checked={chosen}
-                  onChange={() => onAnswer({ kind: 'choice', value: option.value })}
-                />
-                <span>{option.label}</span>
-              </label>
-            )
-          })}
-        </div>
-      )
-
     case 'multiple': {
-      const chosen = answer?.kind === 'choices' ? answer.values : []
-      /**
-       * An exclusive option clears the rest and is cleared by them. "None of
-       * these" ticked alongside three services is not a mistake we should keep
-       * and then have to decide how to code.
-       */
-      const exclusive = new Set(['none', 'none_of_these', 'na'])
+      const single = question.type === 'single'
       return (
         <div className="space-y-2">
-          {question.options.map((option) => {
-            const isChosen = chosen.includes(option.value)
+          {offered.map((option) => {
+            const isChosen = chosen.includes(option.code)
             return (
               <label
-                key={option.value}
+                key={option.code}
                 className={`flex cursor-pointer items-center gap-3 rounded-lg border px-4 py-3 transition ${
                   isChosen
                     ? 'border-neutral-900 bg-neutral-50'
@@ -248,27 +239,46 @@ function Field({
                 }`}
               >
                 <input
-                  type="checkbox"
+                  type={single ? 'radio' : 'checkbox'}
+                  name={question.code}
                   checked={isChosen}
                   onChange={() => {
-                    let values: string[]
-                    if (isChosen) {
-                      values = chosen.filter((v) => v !== option.value)
-                    } else if (exclusive.has(option.value)) {
-                      values = [option.value]
-                    } else {
-                      values = [
-                        ...chosen.filter((v) => !exclusive.has(v)),
-                        option.value,
-                      ]
+                    if (single) {
+                      return setCodes([option.code], otherText || undefined)
                     }
-                    onAnswer({ kind: 'choices', values })
+                    // Exclusive options clear the rest and are cleared by
+                    // them: "none of these" alongside three services is not a
+                    // mistake worth keeping and then having to code.
+                    const exclusive = (c: number) =>
+                      c === PREFER_NOT_CODE ||
+                      offered.find((o) => o.code === c)?.exclusive
+                    let next: number[]
+                    if (isChosen) next = chosen.filter((c) => c !== option.code)
+                    else if (exclusive(option.code)) next = [option.code]
+                    else next = [...chosen.filter((c) => !exclusive(c)), option.code]
+                    setCodes(next, otherText || undefined)
                   }}
                 />
                 <span>{option.label}</span>
               </label>
             )
           })}
+
+          {chosen.includes(OTHER_CODE) && (
+            <input
+              type="text"
+              value={otherText}
+              placeholder="Tell us what"
+              onChange={(e) => setCodes(chosen, e.target.value)}
+              className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
+            />
+          )}
+
+          {question.maxSelections && !single && (
+            <p className="text-xs text-neutral-500">
+              Choose up to {question.maxSelections}.
+            </p>
+          )}
         </div>
       )
     }

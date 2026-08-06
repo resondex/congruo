@@ -20,15 +20,35 @@ function readQuestion(raw: unknown, index: number): QuestionInput | { error: str
     return { error: `Question ${q.code} has no text.` }
   }
 
-  const options: { value: string; label: string }[] = []
+  // Codes come from the client because they are assigned once and must not be
+  // renumbered by a save; they are still checked for shape and uniqueness here,
+  // since "the browser said so" is not a reason to trust an analysis key.
+  const options: { code: number; label: string; mapsTo?: string; exclusive?: boolean }[] = []
+  const seenCodes = new Set<number>()
   if (Array.isArray(q.options)) {
     for (const option of q.options) {
-      const { value, label } = (option ?? {}) as Record<string, unknown>
-      if (typeof value !== 'string' || typeof label !== 'string') {
-        return { error: `Question ${q.code} has a malformed option.` }
+      const { code, label, mapsTo, exclusive } = (option ?? {}) as Record<string, unknown>
+      if (typeof code !== 'number' || !Number.isInteger(code) || code < 1) {
+        return { error: `Question ${q.code} has an option with no code.` }
       }
-      if (!value.trim()) continue
-      options.push({ value: value.trim(), label: label.trim() || value.trim() })
+      if (code === 97 || code === 98) {
+        return {
+          error: `Question ${q.code} uses a reserved code - 97 and 98 are "other" and "prefer not to say".`,
+        }
+      }
+      if (seenCodes.has(code)) {
+        return { error: `Question ${q.code} uses code ${code} twice.` }
+      }
+      seenCodes.add(code)
+      if (typeof label !== 'string') {
+        return { error: `Question ${q.code} has an option with no label.` }
+      }
+      options.push({
+        code,
+        label: label.trim(),
+        mapsTo: typeof mapsTo === 'string' && mapsTo.trim() ? mapsTo.trim() : undefined,
+        exclusive: exclusive === true ? true : undefined,
+      })
     }
   }
 
@@ -61,6 +81,11 @@ function readQuestion(raw: unknown, index: number): QuestionInput | { error: str
     max: num(q.max),
     minLabel: str(q.minLabel),
     maxLabel: str(q.maxLabel),
+    allowOther: q.allowOther === true,
+    allowPreferNotToSay: q.allowPreferNotToSay === true,
+    minSelections: num(q.minSelections),
+    maxSelections: num(q.maxSelections),
+    matrixRows: null,
     claim: (q.claim as Record<string, unknown>) ?? null,
     showIf: (q.showIf as Record<string, unknown>) ?? null,
     terminateIf: (q.terminateIf as Record<string, unknown>) ?? null,

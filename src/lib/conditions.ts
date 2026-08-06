@@ -43,10 +43,15 @@ export type Condition =
 /** The choices an answer represents, whatever shape it was stored in. */
 function choicesOf(answer: AnswerValue): string[] {
   switch (answer.kind) {
-    case 'choice':
-      return [answer.value]
-    case 'choices':
-      return answer.values
+    case 'codes':
+      return answer.codes.map(String)
+    case 'order':
+      return answer.codes.map(String)
+    case 'allocation':
+      // The codes that were given anything. Allocating zero is not choosing.
+      return Object.entries(answer.parts)
+        .filter(([, amount]) => amount > 0)
+        .map(([code]) => code)
     case 'text':
       return [answer.value]
     case 'number':
@@ -62,8 +67,11 @@ function numberOf(answer: AnswerValue): number | null {
 function isAnswered(answer: AnswerValue | undefined): boolean {
   if (!answer) return false
   switch (answer.kind) {
-    case 'choices':
-      return answer.values.length > 0
+    case 'codes':
+    case 'order':
+      return answer.codes.length > 0
+    case 'allocation':
+      return Object.keys(answer.parts).length > 0
     case 'text':
       return answer.value.trim().length > 0
     default:
@@ -85,10 +93,17 @@ function evaluateTest(test: Test, answers: Answers): boolean {
   if (!isAnswered(answer) || answer === undefined) return false
 
   switch (test.op) {
-    case 'is':
-      return choicesOf(answer).length === 1 && choicesOf(answer)[0] === test.value
-    case 'is_not':
-      return !(choicesOf(answer).length === 1 && choicesOf(answer)[0] === test.value)
+    // Compared as strings on both sides. Option codes are numbers and a
+    // stored rule may hold either, so normalising once here is cheaper than
+    // every caller remembering which it has.
+    case 'is': {
+      const chosen = choicesOf(answer)
+      return chosen.length === 1 && chosen[0] === String(test.value)
+    }
+    case 'is_not': {
+      const chosen = choicesOf(answer)
+      return !(chosen.length === 1 && chosen[0] === String(test.value))
+    }
     case 'includes':
       return choicesOf(answer).includes(String(test.value))
     case 'excludes':

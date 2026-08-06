@@ -2,9 +2,11 @@ import 'server-only'
 import { db, dbConfigured } from './db'
 import {
   forwardReferences,
+  NO_ROW,
   type Answers,
   type Claim,
   type Question,
+  type QuestionOption,
   type QuestionType,
 } from './survey'
 import { isCondition } from './conditions'
@@ -23,7 +25,12 @@ interface QuestionRow {
   type: QuestionType
   prompt: string
   help: string | null
-  options: { value: string; label: string }[]
+  options: QuestionOption[]
+  matrix_rows: QuestionOption[] | null
+  allow_other: boolean
+  allow_prefer_not_to_say: boolean
+  min_selections: number | null
+  max_selections: number | null
   required: boolean
   min_value: number | null
   max_value: number | null
@@ -58,6 +65,11 @@ function fromRow(row: QuestionRow): Question {
     prompt: row.prompt,
     help: row.help ?? undefined,
     options: Array.isArray(row.options) ? row.options : [],
+    matrixRows: Array.isArray(row.matrix_rows) ? row.matrix_rows : undefined,
+    allowOther: row.allow_other,
+    allowPreferNotToSay: row.allow_prefer_not_to_say,
+    minSelections: row.min_selections ?? undefined,
+    maxSelections: row.max_selections ?? undefined,
     required: row.required,
     min: row.min_value ?? undefined,
     max: row.max_value ?? undefined,
@@ -80,7 +92,8 @@ export async function getQuestions(studySlug: string): Promise<Question[]> {
   const rows = await db()<QuestionRow[]>`
     select code, position, page, type, prompt, help, options, required,
            min_value, max_value, min_label, max_label, claim,
-           show_if, terminate_if
+           show_if, terminate_if, matrix_rows, allow_other,
+           allow_prefer_not_to_say, min_selections, max_selections
     from survey_questions
     where study_slug = ${studySlug}
     order by position
@@ -114,18 +127,29 @@ export async function persistSurvey(
 ): Promise<{ answered: number }> {
   const rows = Object.entries(answers)
     .filter(([, value]) => value !== undefined)
-    .map(([code, value]) => {
+    .map(([key, value]) => {
       const answer = value!
+      // "question#row" for a matrix cell, bare code otherwise.
+      const [code, row] = key.split('#')
       return {
         session_id: sessionId,
         question_code: code,
-        value_text: answer.kind === 'text' ? answer.value : null,
+        row_code: row ? Number(row) : NO_ROW,
+        value_text:
+          answer.kind === 'text'
+            ? answer.value
+            : // The verbatim beside an "other" selection, which is a second
+              // column of the same answer rather than a separate one.
+              answer.kind === 'codes' && answer.text
+              ? answer.text
+              : null,
         value_number: answer.kind === 'number' ? answer.value : null,
-        value_choices:
-          answer.kind === 'choices'
-            ? answer.values
-            : answer.kind === 'choice'
-              ? [answer.value]
+        value_codes: answer.kind === 'codes' ? answer.codes : null,
+        value_json:
+          answer.kind === 'order'
+            ? { order: answer.codes }
+            : answer.kind === 'allocation'
+              ? { parts: answer.parts }
               : null,
       }
     })
@@ -139,11 +163,12 @@ export async function persistSurvey(
       // not leave two conflicting rows for one question.
       await tx`
         insert into survey_answers ${tx(rows)}
-        on conflict (session_id, question_code) do update set
-          value_text    = excluded.value_text,
-          value_number  = excluded.value_number,
-          value_choices = excluded.value_choices,
-          answered_at   = now()
+        on conflict (session_id, question_code, row_code) do update set
+          value_text   = excluded.value_text,
+          value_number = excluded.value_number,
+          value_codes  = excluded.value_codes,
+          value_json   = excluded.value_json,
+          answered_at  = now()
       `
     }
 
