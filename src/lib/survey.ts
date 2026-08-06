@@ -31,6 +31,8 @@ export type QuestionType =
   | 'date'
   | 'ranking'
   | 'allocation'
+  | 'polar'
+  | 'overlap'
   | 'section'
   | 'description'
   | 'media'
@@ -45,6 +47,8 @@ const ANSWERABLE = new Set<QuestionType>([
   'date',
   'ranking',
   'allocation',
+  'polar',
+  'overlap',
 ])
 
 export const isAnswerable = (type: QuestionType) => ANSWERABLE.has(type)
@@ -150,6 +154,29 @@ export interface Question {
   minSelections?: number
   maxSelections?: number
 
+  /**
+   * How to draw it, where the drawing does not change the data.
+   *
+   * A star rating, a slider, a smiley face, a thermometer and a numbered scale
+   * all store one number in a range. Making each a type would mean a validator,
+   * a storage shape and a comparison per widget - identical, and free to drift.
+   */
+  display?: Display
+
+  /**
+   * One label per scale point, in order.
+   *
+   * The labels are the author's to change; the values under them are the
+   * positions and are not, which is the same split as option codes. A wave two
+   * that relabels "Somewhat agree" still means 4.
+   */
+  pointLabels?: string[]
+
+  /** overlap only. */
+  staticLabel?: string
+  staticImage?: string
+  movingLabel?: string
+
   /** media elements only. */
   mediaUrl?: string
   mediaAlt?: string
@@ -159,6 +186,33 @@ export interface Question {
    * the session and never ends it - see src/lib/quality.ts.
    */
   qualityCheck?: QualityCheck
+}
+
+/**
+ * Widgets that leave the data alone.
+ *
+ * `nps` is the exception worth naming: it fixes the range at 0 to 10 and the
+ * wording, because a Net Promoter Score that is not on that scale is not a Net
+ * Promoter Score and comparing it to a benchmark would be wrong.
+ */
+export type Display =
+  | 'numbers'
+  | 'stars'
+  | 'hearts'
+  | 'thumbs'
+  | 'slider'
+  | 'smiley'
+  | 'thermometer'
+  | 'nps'
+  | 'differential'
+  | 'dropdown'
+  | 'images'
+
+/** The fixed range a display insists on, if it insists on one. */
+export function displayRange(display?: Display): { min: number; max: number } | null {
+  if (display === 'nps') return { min: 0, max: 10 }
+  if (display === 'thermometer') return { min: 0, max: 100 }
+  return null
 }
 
 export interface QualityCheck {
@@ -400,9 +454,34 @@ export function validateAnswer(
       return null
     }
 
+    case 'polar': {
+      // Two poles, one chosen. Stored as a selection so it reads like one in
+      // the data, and so a polar battery lines up with a segmentation spec.
+      if (answer.kind !== 'codes') return 'Expected one of the two.'
+      const offered = new Set(question.options.map((o) => o.code))
+      if (answer.codes.length !== 1 || !offered.has(answer.codes[0])) {
+        return 'Choose one side or the other.'
+      }
+      return null
+    }
+
+    case 'overlap': {
+      if (answer.kind !== 'number') return 'Expected a position.'
+      if (answer.value < -100 || answer.value > 100) {
+        return 'That is outside the range.'
+      }
+      return null
+    }
+
     case 'scale':
     case 'number': {
       if (answer.kind !== 'number') return 'Expected a number.'
+      // A display can fix the range, and where it does it wins over whatever
+      // the author typed - an NPS on a 1-to-7 scale is not an NPS.
+      const fixed = displayRange(question.display)
+      if (fixed && (answer.value < fixed.min || answer.value > fixed.max)) {
+        return `Choose between ${fixed.min} and ${fixed.max}.`
+      }
       if (!Number.isFinite(answer.value)) return 'That is not a number.'
       if (question.min !== undefined && answer.value < question.min) {
         return `The lowest is ${question.min}.`

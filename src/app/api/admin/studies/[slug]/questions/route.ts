@@ -13,6 +13,8 @@ const TYPES = [
   'date',
   'ranking',
   'allocation',
+  'polar',
+  'overlap',
   'section',
   'description',
   'media',
@@ -118,10 +120,21 @@ function readQuestion(raw: unknown, index: number): QuestionInput | { error: str
     allowPreferNotToSay: q.allowPreferNotToSay === true,
     minSelections: num(q.minSelections),
     maxSelections: num(q.maxSelections),
-    matrixRows: null,
+    matrixRows: Array.isArray(q.matrixRows)
+      ? (q.matrixRows as { code: number; label: string }[]).filter(
+          (r) => typeof r?.code === 'number' && typeof r?.label === 'string'
+        )
+      : null,
     mediaUrl: str(q.mediaUrl),
     mediaAlt: str(q.mediaAlt),
     qualityCheck: quality,
+    display: str(q.display),
+    pointLabels: Array.isArray(q.pointLabels)
+      ? q.pointLabels.map((l) => (typeof l === 'string' ? l : ''))
+      : null,
+    staticLabel: str(q.staticLabel),
+    staticImage: str(q.staticImage),
+    movingLabel: str(q.movingLabel),
     claim: (q.claim as Record<string, unknown>) ?? null,
     showIf: (q.showIf as Record<string, unknown>) ?? null,
     terminateIf: (q.terminateIf as Record<string, unknown>) ?? null,

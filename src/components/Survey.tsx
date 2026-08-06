@@ -19,6 +19,8 @@ import {
   scalePoints,
   terminatedBy,
   validateAnswer,
+  answerKey,
+  displayRange,
   isAnswerable,
   MAX_TEXT_ANSWER,
   OTHER_CODE,
@@ -116,7 +118,10 @@ export default function Survey({ questions, answers, onAnswer, onDone }: Props) 
             key={question.code}
             question={question}
             answer={answers[question.code]}
-            onAnswer={(value) => onAnswer(question.code, value)}
+            rowAnswers={answers}
+            onAnswer={(value, rowCode) =>
+              onAnswer(answerKey(question.code, rowCode), value)
+            }
             problem={
               showProblems
                 ? validateAnswer(question, answers[question.code])
@@ -161,12 +166,15 @@ export default function Survey({ questions, answers, onAnswer, onDone }: Props) 
 function QuestionField({
   question,
   answer,
+  rowAnswers,
   onAnswer,
   problem,
 }: {
   question: Question
   answer: AnswerValue | undefined
-  onAnswer: (value: AnswerValue | undefined) => void
+  /** Every answer, so a matrix can find its own rows. */
+  rowAnswers?: Answers
+  onAnswer: (value: AnswerValue | undefined, rowCode?: number) => void
   problem: string | null
 }) {
   // Shown, not asked. No legend, no "optional", nothing to get wrong - a
@@ -239,7 +247,30 @@ function QuestionField({
       )}
 
       <div className="mt-5">
-        <Field question={question} answer={answer} onAnswer={onAnswer} />
+        {question.matrixRows?.length ? (
+          /*
+            One row at a time, stacked. A grid on a phone means horizontal
+            scrolling or type too small to read, and the stored answers are the
+            same either way - which is the whole reason a matrix is a modifier
+            rather than a type.
+          */
+          <div className="space-y-5">
+            {question.matrixRows.map((row) => (
+              <div key={row.code} className="rounded-lg border border-neutral-200 p-4">
+                <p className="text-sm font-medium">{row.label}</p>
+                <div className="mt-3">
+                  <Field
+                    question={question}
+                    answer={rowAnswers?.[answerKey(question.code, row.code)]}
+                    onAnswer={(value) => onAnswer(value, row.code)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Field question={question} answer={answer} onAnswer={onAnswer} />
+        )}
       </div>
 
       {problem && <p className="mt-3 text-sm text-red-700">{problem}</p>}
@@ -281,6 +312,27 @@ function Field({
     case 'single':
     case 'multiple': {
       const single = question.type === 'single'
+
+      // Same answer, drawn for a long list rather than a short one.
+      if (single && question.display === 'dropdown') {
+        return (
+          <select
+            value={chosen[0] ?? ''}
+            onChange={(e) =>
+              setCodes(e.target.value ? [Number(e.target.value)] : [])
+            }
+            className="w-full rounded-lg border border-neutral-300 px-4 py-3 focus:border-neutral-900 focus:outline-none"
+          >
+            <option value="">Choose one</option>
+            {offered.map((o) => (
+              <option key={o.code} value={o.code}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        )
+      }
+
       return (
         <div className="space-y-2">
           {offered.map((option) => {
@@ -339,9 +391,188 @@ function Field({
       )
     }
 
+    case 'polar': {
+      // Two poles side by side. The same construct as a polar battery in a
+      // segmentation spec, so a study can feed one without a recode.
+      const picked = answer?.kind === 'codes' ? answer.codes[0] : null
+      const [left, right] = question.options
+      return (
+        <div className="grid grid-cols-2 gap-3">
+          {[left, right].filter(Boolean).map((option) => (
+            <button
+              key={option.code}
+              type="button"
+              onClick={() => onAnswer({ kind: 'codes', codes: [option.code] })}
+              className={`rounded-lg border px-4 py-6 text-sm transition ${
+                picked === option.code
+                  ? 'border-neutral-900 bg-neutral-900 text-white'
+                  : 'border-neutral-200 hover:border-neutral-400'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )
+    }
+
+    case 'overlap': {
+      /**
+       * Two circles the respondent slides together. Apart is -100, fully
+       * overlapping is +100, and touching is 0.
+       *
+       * A continuous form of the Inclusion of Other in the Self scale, which
+       * has been used since 1992 with seven fixed pictures - worth knowing,
+       * because it means this measure has literature behind it rather than
+       * being a novelty.
+       */
+      const given = answer?.kind === 'number'
+      const at = given ? answer.value : 0
+      // -100 fully apart, +100 concentric.
+      const shift = 50 - (at + 100) / 4
+      return (
+        <div>
+          {/*
+            Until it is touched, the control shows a position it has not
+            recorded. Left looking normal it reads as answered, and the
+            respondent is then refused with no visible reason - so say so, and
+            do not invent a value on their behalf.
+          */}
+          <div
+            className={`relative mx-auto h-40 w-full max-w-sm transition-opacity ${
+              given ? '' : 'opacity-40'
+            }`}
+          >
+            <div
+              className="absolute top-1/2 flex h-32 w-32 -translate-y-1/2 items-center justify-center overflow-hidden rounded-full border-2 border-neutral-400 bg-neutral-100 text-center text-xs"
+              style={{ left: '50%', marginLeft: '-4rem' }}
+            >
+              {question.staticImage ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={question.staticImage}
+                  alt={question.staticLabel ?? ''}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="px-2">{question.staticLabel}</span>
+              )}
+            </div>
+            <div
+              className="absolute top-1/2 flex h-32 w-32 -translate-y-1/2 items-center justify-center rounded-full border-2 border-neutral-900 bg-white/80 text-center text-xs font-medium transition-all"
+              style={{ left: `calc(50% + ${shift}% )`, marginLeft: '-4rem' }}
+            >
+              <span className="px-2">{question.movingLabel}</span>
+            </div>
+          </div>
+          <input
+            type="range"
+            min={-100}
+            max={100}
+            value={at}
+            onChange={(e) =>
+              onAnswer({ kind: 'number', value: Number(e.target.value) })
+            }
+            className="mt-2 w-full"
+          />
+          <div className="flex justify-between text-xs text-neutral-500">
+            <span>Completely separate</span>
+            <span>Completely overlapping</span>
+          </div>
+          {!given && (
+            <p className="mt-2 text-sm text-neutral-500">
+              Move the slider to answer.
+            </p>
+          )}
+        </div>
+      )
+    }
+
     case 'scale': {
-      const points = scalePoints(question)
+      const fixed = displayRange(question.display)
+      const bounded = fixed
+        ? { ...question, min: fixed.min, max: fixed.max }
+        : question
+      const points = scalePoints(bounded)
       const chosen = answer?.kind === 'number' ? answer.value : null
+      const pick = (value: number) => onAnswer({ kind: 'number', value })
+
+      // A slider or a thermometer over a wide range: a hundred buttons is not
+      // a scale, it is a wall.
+      if (question.display === 'slider' || question.display === 'thermometer') {
+        const lo = bounded.min ?? 0
+        const hi = bounded.max ?? 100
+        return (
+          <div>
+            <input
+              type="range"
+              min={lo}
+              max={hi}
+              value={chosen ?? Math.round((lo + hi) / 2)}
+              onChange={(e) => pick(Number(e.target.value))}
+              className={`w-full ${chosen === null ? 'opacity-40' : ''}`}
+            />
+            <div className="flex justify-between text-xs text-neutral-500">
+              <span>{question.minLabel ?? lo}</span>
+              <span className="font-medium tabular-nums text-neutral-900">
+                {chosen ?? 'move to answer'}
+              </span>
+              <span>{question.maxLabel ?? hi}</span>
+            </div>
+          </div>
+        )
+      }
+
+      const SYMBOLS: Record<string, string[]> = {
+        stars: ['★'],
+        hearts: ['♥'],
+        thumbs: ['👎', '👍'],
+        smiley: ['😞', '🙁', '😐', '🙂', '😄'],
+      }
+      const symbols = question.display ? SYMBOLS[question.display] : undefined
+
+      if (symbols) {
+        return (
+          <div>
+            <div className="flex flex-wrap gap-2">
+              {points.map((point, i) => {
+                // A run of one symbol fills up to the chosen point, the way a
+                // star rating reads. A set of distinct faces does not.
+                const cumulative = symbols.length === 1
+                const on = cumulative
+                  ? chosen !== null && point <= chosen
+                  : chosen === point
+                const glyph =
+                  symbols.length === 1
+                    ? symbols[0]
+                    : symbols[Math.floor((i / points.length) * symbols.length)]
+                return (
+                  <button
+                    key={point}
+                    type="button"
+                    onClick={() => pick(point)}
+                    aria-label={question.pointLabels?.[i] ?? String(point)}
+                    aria-pressed={chosen === point}
+                    className={`h-12 w-12 rounded-md border text-xl transition ${
+                      on
+                        ? 'border-neutral-900 bg-neutral-50'
+                        : 'border-neutral-200 opacity-40 hover:opacity-100'
+                    }`}
+                  >
+                    {glyph}
+                  </button>
+                )
+              })}
+            </div>
+            {chosen !== null && question.pointLabels?.[points.indexOf(chosen)] && (
+              <p className="mt-2 text-sm text-neutral-600">
+                {question.pointLabels[points.indexOf(chosen)]}
+              </p>
+            )}
+          </div>
+        )
+      }
+
       return (
         <div>
           <div className="flex gap-1.5">
@@ -349,7 +580,7 @@ function Field({
               <button
                 key={point}
                 type="button"
-                onClick={() => onAnswer({ kind: 'number', value: point })}
+                onClick={() => pick(point)}
                 aria-pressed={chosen === point}
                 className={`h-12 flex-1 rounded-md border text-sm tabular-nums transition ${
                   chosen === point
@@ -361,11 +592,23 @@ function Field({
               </button>
             ))}
           </div>
-          {(question.minLabel || question.maxLabel) && (
-            <div className="mt-2 flex justify-between text-xs text-neutral-500">
-              <span>{question.minLabel}</span>
-              <span>{question.maxLabel}</span>
+          {question.pointLabels?.length ? (
+            // Every point named. The labels are the author's to change; the
+            // numbers under them are the data and are not.
+            <div className="mt-2 grid gap-1 text-xs text-neutral-600" style={{ gridTemplateColumns: `repeat(${points.length}, minmax(0, 1fr))` }}>
+              {points.map((point, i) => (
+                <span key={point} className="text-center leading-tight">
+                  {question.pointLabels?.[i] ?? ''}
+                </span>
+              ))}
             </div>
+          ) : (
+            (question.minLabel || question.maxLabel) && (
+              <div className="mt-2 flex justify-between text-xs text-neutral-500">
+                <span>{question.minLabel}</span>
+                <span>{question.maxLabel}</span>
+              </div>
+            )
           )}
         </div>
       )

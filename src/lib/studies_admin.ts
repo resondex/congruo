@@ -136,6 +136,8 @@ export interface QuestionInput {
     | 'date'
     | 'ranking'
     | 'allocation'
+    | 'polar'
+    | 'overlap'
     | 'section'
     | 'description'
     | 'media'
@@ -151,6 +153,11 @@ export interface QuestionInput {
   mediaUrl: string | null
   mediaAlt: string | null
   qualityCheck: Record<string, unknown> | null
+  display: string | null
+  pointLabels: string[] | null
+  staticLabel: string | null
+  staticImage: string | null
+  movingLabel: string | null
   required: boolean
   min: number | null
   max: number | null
@@ -209,10 +216,13 @@ export async function replaceQuestions(
       return { error: `${q.code} has no text.` }
     }
     if (
-      ['single', 'multiple', 'ranking', 'allocation'].includes(q.type) &&
+      ['single', 'multiple', 'ranking', 'allocation', 'polar'].includes(q.type) &&
       !q.options.length
     ) {
       return { error: `${q.code} needs at least one option.` }
+    }
+    if (q.type === 'polar' && q.options.length !== 2) {
+      return { error: `${q.code} is a polar and needs exactly two sides.` }
     }
     if (q.type === 'ranking' && q.options.length < 2) {
       return { error: `${q.code} needs at least two things to put in order.` }
@@ -244,6 +254,11 @@ export async function replaceQuestions(
           media_url: q.mediaUrl,
           media_alt: q.mediaAlt,
           quality_check: q.qualityCheck ? tx.json(q.qualityCheck as never) : null,
+          display: q.display,
+          point_labels: q.pointLabels ? tx.json(q.pointLabels) : null,
+          static_label: q.staticLabel,
+          static_image: q.staticImage,
+          moving_label: q.movingLabel,
           required: q.required,
           min_value: q.min,
           max_value: q.max,

@@ -37,6 +37,12 @@ export interface EditableQuestion {
   mediaUrl: string | null
   mediaAlt: string | null
   qualityCheck: Record<string, unknown> | null
+  display: string | null
+  pointLabels: string[] | null
+  staticLabel: string | null
+  staticImage: string | null
+  movingLabel: string | null
+  matrixRows: { code: number; label: string }[] | null
   allowOther: boolean
   allowPreferNotToSay: boolean
   minSelections: number | null
@@ -60,6 +66,8 @@ const TYPES: { value: QType; label: string; group: string }[] = [
   { value: 'date', label: 'A date', group: 'Asks something' },
   { value: 'ranking', label: 'Put in order', group: 'Asks something' },
   { value: 'allocation', label: 'Split 100 points', group: 'Asks something' },
+  { value: 'polar', label: 'This or that', group: 'Asks something' },
+  { value: 'overlap', label: 'Overlapping circles', group: 'Asks something' },
   { value: 'section', label: 'Section heading', group: 'Shows something' },
   { value: 'description', label: 'Explanatory text', group: 'Shows something' },
   { value: 'media', label: 'Image', group: 'Shows something' },
@@ -120,6 +128,12 @@ export default function QuestionEditor({
         mediaUrl: null,
         mediaAlt: null,
         qualityCheck: null,
+        display: null,
+        pointLabels: null,
+        staticLabel: null,
+        staticImage: null,
+        movingLabel: null,
+        matrixRows: null,
         allowOther: false,
         allowPreferNotToSay: false,
         minSelections: null,
@@ -404,6 +418,91 @@ export default function QuestionEditor({
                       onChange={(patch) => change(index, patch)}
                     />
                   )}
+
+                  {['single', 'scale'].includes(q.type) && (
+                    <label className="block">
+                      <span className="text-xs font-medium text-neutral-700">
+                        How to draw it
+                      </span>
+                      <select
+                        disabled={readOnly}
+                        value={q.display ?? ''}
+                        onChange={(e) =>
+                          change(index, { display: e.target.value || null })
+                        }
+                        className="mt-1 block rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                      >
+                        {q.type === 'single' ? (
+                          <>
+                            <option value="">Buttons</option>
+                            <option value="dropdown">Dropdown - for a long list</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="">Numbered points</option>
+                            <option value="stars">Stars</option>
+                            <option value="hearts">Hearts</option>
+                            <option value="thumbs">Thumbs</option>
+                            <option value="smiley">Faces</option>
+                            <option value="slider">Slider</option>
+                            <option value="thermometer">Thermometer, 0 to 100</option>
+                            <option value="nps">Net Promoter, 0 to 10</option>
+                          </>
+                        )}
+                      </select>
+                      {q.display === 'nps' && (
+                        <span className="mt-1 block text-xs text-neutral-500">
+                          Fixed at 0 to 10. A Net Promoter Score on any other
+                          scale cannot be compared to a benchmark.
+                        </span>
+                      )}
+                    </label>
+                  )}
+
+                  {q.type === 'scale' && !['nps', 'thermometer', 'slider'].includes(q.display ?? '') && (
+                    <PointLabels
+                      question={q}
+                      readOnly={readOnly}
+                      onChange={(patch) => change(index, patch)}
+                    />
+                  )}
+
+                  {q.type === 'overlap' && (
+                    <div className="flex flex-wrap gap-3">
+                      {(
+                        [
+                          ['staticLabel', 'The fixed circle says'],
+                          ['staticImage', 'or shows this image'],
+                          ['movingLabel', 'The circle they move says'],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <label key={key} className="min-w-48 flex-1">
+                          <span className="text-xs font-medium text-neutral-700">
+                            {label}
+                          </span>
+                          <input
+                            disabled={readOnly}
+                            value={(q[key] as string | null) ?? ''}
+                            onChange={(e) =>
+                              change(index, {
+                                [key]: e.target.value || null,
+                              } as Partial<EditableQuestion>)
+                            }
+                            className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  )}
+
+                  {isAnswerable(q.type) &&
+                    !['ranking', 'allocation', 'overlap'].includes(q.type) && (
+                      <MatrixRows
+                        question={q}
+                        readOnly={readOnly}
+                        onChange={(matrixRows) => change(index, { matrixRows })}
+                      />
+                    )}
 
                   {q.type === 'allocation' && (
                     <label className="block">
@@ -1033,6 +1132,155 @@ function QualityEditor({
             </span>
           )}
         </label>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A label for each point of a scale.
+ *
+ * The labels move, the values under them do not - the same split as option
+ * codes, and for the same reason: relabelling "Somewhat agree" in wave two must
+ * not change what a 4 means in the file.
+ */
+function PointLabels({
+  question,
+  readOnly,
+  onChange,
+}: {
+  question: EditableQuestion
+  readOnly: boolean
+  onChange: (patch: Partial<EditableQuestion>) => void
+}) {
+  const count = (question.max ?? 5) - (question.min ?? 1) + 1
+  const labels = question.pointLabels ?? []
+
+  return (
+    <div className="rounded-md border border-neutral-200 p-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="text-xs">
+          Points
+          <input
+            type="number"
+            min={2}
+            max={11}
+            disabled={readOnly}
+            value={count}
+            onChange={(e) => {
+              const n = Math.max(2, Math.min(11, Number(e.target.value) || 5))
+              onChange({
+                min: 1,
+                max: n,
+                pointLabels: labels.slice(0, n),
+              })
+            }}
+            className="ml-2 w-16 rounded-md border border-neutral-300 px-2 py-1"
+          />
+        </label>
+        <span className="text-xs text-neutral-500">
+          Values run 1 to {count} and are not editable.
+        </span>
+      </div>
+
+      <div className="mt-3 space-y-1">
+        {Array.from({ length: count }, (_, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <span className="w-6 text-center text-xs tabular-nums text-neutral-500">
+              {i + 1}
+            </span>
+            <input
+              disabled={readOnly}
+              value={labels[i] ?? ''}
+              placeholder={i === 0 ? 'lowest' : i === count - 1 ? 'highest' : ''}
+              onChange={(e) => {
+                const next = [...labels]
+                while (next.length < count) next.push('')
+                next[i] = e.target.value
+                onChange({ pointLabels: next })
+              }}
+              className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The things a question is repeated over.
+ *
+ * Empty means an ordinary single question. Adding rows turns it into a matrix
+ * without changing anything else about it, which is the point of a matrix being
+ * a modifier: the scale is authored once and answered once per row.
+ */
+function MatrixRows({
+  question,
+  readOnly,
+  onChange,
+}: {
+  question: EditableQuestion
+  readOnly: boolean
+  onChange: (rows: { code: number; label: string }[] | null) => void
+}) {
+  const rows = question.matrixRows ?? []
+  const nextCode = () => rows.reduce((max, r) => Math.max(max, r.code), 0) + 1
+
+  return (
+    <div className="rounded-md border border-neutral-200 p-3">
+      <span className="text-xs font-medium text-neutral-700">
+        Ask this about several things?
+      </span>
+      <p className="mt-0.5 text-xs text-neutral-500">
+        Each one gets its own answer. Drawn as a stacked list on a phone rather
+        than a grid, which stores exactly the same thing.
+      </p>
+
+      {rows.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {rows.map((row, i) => (
+            <div key={row.code} className="flex items-center gap-2">
+              <span className="w-8 rounded bg-neutral-100 text-center text-xs tabular-nums text-neutral-600">
+                {row.code}
+              </span>
+              <input
+                disabled={readOnly}
+                value={row.label}
+                onChange={(e) =>
+                  onChange(
+                    rows.map((r, j) =>
+                      j === i ? { ...r, label: e.target.value } : r
+                    )
+                  )
+                }
+                className="flex-1 rounded-md border border-neutral-300 px-2 py-1 text-xs"
+              />
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = rows.filter((_, j) => j !== i)
+                    onChange(next.length ? next : null)
+                  }}
+                  className="text-xs text-neutral-400 hover:text-red-700"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!readOnly && (
+        <button
+          type="button"
+          onClick={() => onChange([...rows, { code: nextCode(), label: '' }])}
+          className="mt-2 text-xs text-neutral-500 underline hover:text-neutral-900"
+        >
+          {rows.length ? 'Add another' : 'Add the first one'}
+        </button>
       )}
     </div>
   )

@@ -5,6 +5,7 @@ import {
   NO_ROW,
   type Answers,
   type Claim,
+  type Display,
   type QualityCheck,
   type Question,
   type QuestionOption,
@@ -43,6 +44,11 @@ interface QuestionRow {
   media_url: string | null
   media_alt: string | null
   quality_check: QualityCheck | null
+  display: Display | null
+  point_labels: string[] | null
+  static_label: string | null
+  static_image: string | null
+  moving_label: string | null
 }
 
 /**
@@ -85,6 +91,11 @@ function fromRow(row: QuestionRow): Question {
     mediaUrl: row.media_url ?? undefined,
     mediaAlt: row.media_alt ?? undefined,
     qualityCheck: row.quality_check ?? undefined,
+    display: row.display ?? undefined,
+    pointLabels: Array.isArray(row.point_labels) ? row.point_labels : undefined,
+    staticLabel: row.static_label ?? undefined,
+    staticImage: row.static_image ?? undefined,
+    movingLabel: row.moving_label ?? undefined,
   }
 }
 
@@ -101,7 +112,8 @@ export async function getQuestions(studySlug: string): Promise<Question[]> {
            min_value, max_value, min_label, max_label, claim,
            show_if, terminate_if, matrix_rows, allow_other,
            allow_prefer_not_to_say, min_selections, max_selections,
-           media_url, media_alt, quality_check
+           media_url, media_alt, quality_check, display, point_labels,
+           static_label, static_image, moving_label
     from survey_questions
     where study_slug = ${studySlug}
     order by position

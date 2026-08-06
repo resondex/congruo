@@ -1,11 +1,19 @@
 /**
- * Applies supabase/migrations/*.sql in filename order.
+ * Applies supabase/migrations/*.sql in filename order, once each.
  *
  * Run with:  npm run migrate
  *
- * Every migration is written to be idempotent (`if not exists`, `on conflict
- * do nothing`), so re-running is safe and is the normal way to bring a fresh
- * database up to date.
+ * Applied files are recorded, and this is not a refinement - it is a
+ * correctness requirement that was learned the hard way. The runner used to
+ * replay every file on every run, on the theory that they were all idempotent.
+ * That holds for `if not exists`, and does not hold for anything that REPLACES
+ * state: an early migration that set a check constraint replayed happily until
+ * a later one widened it and rows appeared that the old, narrower version
+ * rejected. Replaying then failed against data that was perfectly valid.
+ *
+ * In order, on a fresh database, every file still applies cleanly. What is not
+ * safe is applying an old file to a database that has moved past it, which is
+ * exactly what replaying does.
  *
  * Connects through the transaction pooler, which hands the connection to
  * another client between statements - hence `prepare: false`, and the simple
@@ -32,12 +40,44 @@ if (!files.length) {
 
 const sql = postgres(url, { prepare: false, onnotice: () => {} })
 
+await sql`
+  create table if not exists schema_migrations (
+    filename   text primary key,
+    applied_at timestamptz not null default now()
+  )
+`
+
+const [{ tracked }] = await sql`select count(*)::int as tracked from schema_migrations`
+const [{ existing }] = await sql`
+  select count(*)::int as existing from information_schema.tables
+  where table_schema = 'public' and table_name = 'studies'
+`
+
+// A database that already has the schema but no record of it predates this
+// tracking. Everything on disk is by definition already applied to it, so
+// record that rather than replaying and failing.
+if (tracked === 0 && existing > 0) {
+  await sql`
+    insert into schema_migrations ${sql(files.map((filename) => ({ filename })))}
+    on conflict (filename) do nothing
+  `
+  console.log(`  adopted  ${files.length} existing migrations`)
+}
+
+const done = new Set(
+  (await sql`select filename from schema_migrations`).map((r) => r.filename)
+)
+
 let failed = false
+let applied = 0
 for (const file of files) {
+  if (done.has(file)) continue
   const text = fs.readFileSync(path.join(dir, file), 'utf8')
   try {
     await sql.unsafe(text).simple()
+    await sql`insert into schema_migrations (filename) values (${file})`
     console.log(`  applied  ${file}`)
+    applied++
   } catch (error) {
     failed = true
     console.error(`  FAILED   ${file}`)
@@ -45,6 +85,8 @@ for (const file of files) {
     break
   }
 }
+
+if (!failed && applied === 0) console.log('  nothing new to apply')
 
 if (!failed) {
   const [{ tables }] = await sql`
