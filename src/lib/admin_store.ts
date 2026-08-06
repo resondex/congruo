@@ -145,3 +145,48 @@ export async function orgsFor(user: User): Promise<OrgRow[]> {
     from orgs o order by o.name
   `
 }
+
+export interface PersonRow {
+  id: string
+  email: string
+  name: string | null
+  role: string
+  orgName: string | null
+  lastSeenAt: string | null
+  disabledAt: string | null
+}
+
+/** People the user may see. Same fail-closed scoping as studies. */
+export async function peopleFor(user: User): Promise<PersonRow[]> {
+  const sql = db()
+  const staff = user.role === 'staff'
+  const orgId = user.orgId ?? '00000000-0000-0000-0000-000000000000'
+
+  const rows = await sql<
+    {
+      id: string
+      email: string
+      name: string | null
+      role: string
+      org_name: string | null
+      last_seen_at: string | null
+      disabled_at: string | null
+    }[]
+  >`
+    select u.id, u.email, u.name, u.role, o.name as org_name,
+           u.last_seen_at, u.disabled_at
+    from users u
+    left join orgs o on o.id = u.org_id
+    where ${staff ? sql`true` : sql`u.org_id = ${orgId}`}
+    order by u.created_at
+  `
+  return rows.map((r) => ({
+    id: r.id,
+    email: r.email,
+    name: r.name,
+    role: r.role,
+    orgName: r.org_name,
+    lastSeenAt: r.last_seen_at,
+    disabledAt: r.disabled_at,
+  }))
+}

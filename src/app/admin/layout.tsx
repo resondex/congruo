@@ -29,6 +29,9 @@ export default async function AdminLayout({
             <Link href="/admin" className="hover:text-neutral-900">
               Studies
             </Link>
+            <Link href="/admin/people" className="hover:text-neutral-900">
+              People
+            </Link>
             {user.role === 'staff' && (
               <Link href="/admin/orgs" className="hover:text-neutral-900">
                 Organisations
