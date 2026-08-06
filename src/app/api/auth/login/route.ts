@@ -6,6 +6,7 @@ import {
   verifyPassword,
   type Role,
 } from '@/lib/auth'
+import { hit, clear, callerIp, sweep } from '@/lib/rate_limit'
 
 /**
  * Sign-in for the people who run studies. Respondents never reach this.
@@ -16,6 +17,22 @@ import {
  */
 
 const SAME_FOR_EVERY_FAILURE = 'That email and password do not match.'
+
+/**
+ * Two counters, because they stop different things.
+ *
+ * By account: someone working through a password list against one address.
+ * By address: someone working through a list of accounts from one machine,
+ * which the per-account counter would never see. The second is looser because
+ * an office shares an address and a genuine group of colleagues should not
+ * lock each other out.
+ *
+ * scrypt already makes each attempt cost real CPU, which is protection and
+ * also the problem - unthrottled, an attacker can exhaust the server's CPU
+ * without ever guessing anything.
+ */
+const PER_ACCOUNT = { limit: 8, seconds: 900 }
+const PER_ADDRESS = { limit: 40, seconds: 900 }
 
 interface Row {
   id: string
@@ -45,9 +62,29 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: SAME_FOR_EVERY_FAILURE }, { status: 400 })
   }
 
+  void sweep()
+  const address = normaliseEmail(email)
+  const ip = callerIp(request.headers)
+
+  // Counted before the password is checked, so a wrong guess costs an attempt
+  // whether or not the account exists.
+  const [byAccount, byAddress] = await Promise.all([
+    hit(`login:acct:${address}`, PER_ACCOUNT.limit, PER_ACCOUNT.seconds),
+    hit(`login:ip:${ip}`, PER_ADDRESS.limit, PER_ADDRESS.seconds),
+  ])
+  const limited = !byAccount.ok ? byAccount : !byAddress.ok ? byAddress : null
+  if (limited) {
+    return Response.json(
+      {
+        error: `Too many attempts. Try again in ${Math.ceil(limited.retryAfter / 60)} minutes.`,
+      },
+      { status: 429, headers: { 'retry-after': String(limited.retryAfter) } }
+    )
+  }
+
   const rows = await db()<Row[]>`
     select id, password_hash, password_salt, role, disabled_at
-    from users where email = ${normaliseEmail(email)} limit 1
+    from users where email = ${address} limit 1
   `
   const row = rows[0]
 
@@ -63,6 +100,9 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: SAME_FOR_EVERY_FAILURE }, { status: 401 })
   }
 
+  // Only a success clears it: someone who mistyped four times and then got it
+  // right should not still be one attempt from a lockout.
+  await clear(`login:acct:${address}`)
   await createSession(row.id, request.headers.get('user-agent') ?? undefined)
   return Response.json({ ok: true })
 }

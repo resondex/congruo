@@ -71,6 +71,13 @@ export default function LoginForm({ next }: { next: string }) {
       >
         {busy ? 'Signing in…' : 'Sign in'}
       </button>
+
+      <a
+        href="/forgot"
+        className="block text-center text-sm text-neutral-500 underline hover:text-neutral-900"
+      >
+        I forgot my password
+      </a>
     </form>
   )
 }

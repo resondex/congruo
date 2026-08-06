@@ -2,7 +2,8 @@ import 'server-only'
 import { createHash } from 'node:crypto'
 import { db } from './db'
 import { hashPassword } from './password'
-import { newToken, type Role, type User } from './auth'
+import { send } from './mail'
+import { newToken, normaliseEmail, type Role, type User } from './auth'
 
 /**
  * Password resets.
@@ -118,5 +119,55 @@ export async function consumeReset(
     `
     await tx`delete from auth_sessions where user_id = ${userId}`
     return { userId }
+  })
+}
+
+/**
+ * A reset the account holder asked for themselves.
+ *
+ * Returns nothing useful on purpose. Whether the address exists, whether it is
+ * disabled, whether mail actually went out - none of it reaches the caller,
+ * because any difference between those cases is a way to ask whether somebody
+ * has an account here. The endpoint says the same thing every time.
+ */
+export async function requestReset(
+  email: string,
+  linkFor: (token: string) => string
+): Promise<void> {
+  const sql = db()
+  const rows = await sql<{ id: string; email: string }[]>`
+    select id, email from users
+    where email = ${normaliseEmail(email)} and disabled_at is null
+    limit 1
+  `
+  if (!rows.length) return
+
+  // Any earlier link stops working, so asking twice does not leave two live
+  // ways into the account.
+  await sql`
+    update password_resets set used_at = now()
+    where user_id = ${rows[0].id} and used_at is null
+  `
+
+  const token = newToken()
+  await sql`
+    insert into password_resets (token_hash, user_id, expires_at)
+    values (
+      ${hashOf(token)}, ${rows[0].id},
+      ${new Date(Date.now() + RESET_HOURS * 3600_000)}
+    )
+  `
+
+  await send({
+    to: rows[0].email,
+    subject: 'Reset your Congruo password',
+    text: [
+      'Someone asked to reset the password for this Congruo account.',
+      '',
+      linkFor(token),
+      '',
+      `The link works once and expires in ${RESET_HOURS} hours.`,
+      'If this was not you, nothing has changed and you can ignore this.',
+    ].join('\n'),
   })
 }
