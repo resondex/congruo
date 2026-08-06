@@ -1,4 +1,5 @@
 import 'server-only'
+import { cache } from 'react'
 import { randomBytes, createHash } from 'node:crypto'
 import { cookies } from 'next/headers'
 import { db, dbConfigured } from './db'
@@ -84,8 +85,13 @@ interface UserRow {
 /**
  * The signed-in user, or null. Expired sessions are treated as absent and
  * cleaned up as they are encountered rather than by a scheduled job.
+ *
+ * Wrapped in React's cache so it runs once per request however many components
+ * ask. The layout guards and the page then re-reads it, which was two round
+ * trips to a database 40ms away for the same row - and two stamp writes with
+ * it. Nothing here is memoised across requests: the cache is per render.
  */
-export async function currentUser(): Promise<User | null> {
+export const currentUser = cache(async function currentUser(): Promise<User | null> {
   if (!dbConfigured()) return null
 
   const jar = await cookies()
@@ -124,7 +130,7 @@ export async function currentUser(): Promise<User | null> {
     orgId: row.org_id,
     orgName: row.org_name,
   }
-}
+})
 
 export const isStaff = (user: User) => user.role === 'staff'
 export const canEditStudies = (user: User) =>

@@ -26,12 +26,15 @@ export default async function StudyPage({
   const { slug } = await params
   const user = await requireUser()
 
-  const summary = await studyFor(user, slug)
+  // In parallel: none of these depends on another, and each is a round trip to
+  // a database roughly 40ms away. Awaited one at a time they were the page.
+  const [summary, study, orgs] = await Promise.all([
+    studyFor(user, slug),
+    // The respondent-facing record, for fields the summary does not carry.
+    getStudy(slug),
+    orgsFor(user),
+  ])
   if (!summary) notFound()
-
-  // The respondent-facing record, for the fields the summary does not carry.
-  const study = await getStudy(slug)
-  const orgs = await orgsFor(user)
   const editable = canEditStudies(user)
 
   const rate = summary.surveyed

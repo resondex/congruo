@@ -13,10 +13,11 @@ export default async function QuestionsPage({
   const { slug } = await params
   const user = await requireUser()
 
-  const summary = await studyFor(user, slug)
+  const [summary, questions] = await Promise.all([
+    studyFor(user, slug),
+    getQuestions(slug),
+  ])
   if (!summary) notFound()
-
-  const questions = await getQuestions(slug)
   const editable = canEditStudies(user)
 
   const initial: EditableQuestion[] = questions.map((q) => ({

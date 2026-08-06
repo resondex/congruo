@@ -77,7 +77,7 @@ const toSummary = (r: Row): StudySummary => ({
  * closed, because the cost of the other direction is one client reading
  * another's respondents.
  */
-export async function studiesFor(user: User): Promise<StudySummary[]> {
+async function query(user: User, slug: string | null): Promise<StudySummary[]> {
   const sql = db()
   const scoped = user.role === 'staff'
   // A client with no org would otherwise match `org_id is null` and be handed
@@ -101,21 +101,32 @@ export async function studiesFor(user: User): Promise<StudySummary[]> {
     from studies s
     left join orgs o on o.id = s.org_id
     where ${scoped ? sql`true` : sql`s.org_id = ${orgId}`}
+      and ${slug === null ? sql`true` : sql`s.slug = ${slug}`}
     order by s.created_at_admin desc, s.slug
   `
   return rows.map(toSummary)
 }
 
-/** One study, or null when the user may not see it. Same scoping, one row. */
+export function studiesFor(user: User): Promise<StudySummary[]> {
+  return query(user, null)
+}
+
+/**
+ * One study, or null when the user may not see it.
+ *
+ * Filtered in the query rather than by fetching every study and picking one in
+ * JavaScript, which is what this did first: showing a single study meant
+ * running the whole table's session and record counts to throw all but one row
+ * away.
+ */
 export async function studyFor(
   user: User,
   slug: string
 ): Promise<StudySummary | null> {
-  const all = await studiesFor(user)
-  const found = all.find((s) => s.slug === slug)
+  const [found] = await query(user, slug)
   if (!found) return null
-  // Belt and braces: the query above already scoped, and this re-checks the
-  // answer against the same rule used everywhere else.
+  // The query already scoped; this re-checks the answer against the same rule
+  // used everywhere else, because the cost of being wrong here is a leak.
   return canSeeOrg(user, found.orgId) ? found : null
 }
 
