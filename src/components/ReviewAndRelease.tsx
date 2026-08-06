@@ -58,6 +58,7 @@ interface Receipt {
   sources: string[]
   earliest: string | null
   latest: string | null
+  deletionToken?: string | null
 }
 
 /** How many records a source shows before asking to show more. */
@@ -293,6 +294,13 @@ export default function ReviewAndRelease({
         return
       }
       if (returnTo) {
+        // Not straight to the redirect: the reference is the one thing they
+        // cannot get back, and a handoff that flashes past it would make the
+        // deletion promise unusable for every append respondent.
+        if (data.receipt?.deletionToken) {
+          setReceipt(data.receipt)
+          return
+        }
         window.location.href = returnTo.complete
         return
       }
@@ -349,9 +357,33 @@ export default function ReviewAndRelease({
           )}
         </dl>
         <p className="mt-6 text-sm text-neutral-600">
-          Records you held back were never sent. You can ask us to delete
-          everything at any time.
+          Records you held back were never sent.
         </p>
+
+        {receipt.deletionToken && (
+          /*
+            Shown once and never again - only its hash is stored, so it cannot
+            be looked up later by us or by anyone who takes a copy of the
+            database. That is the point: it is the only thing that identifies
+            this session, and we hold nothing else that could.
+          */
+          <div className="mt-6 rounded-lg border border-neutral-900 bg-neutral-50 p-5">
+            <p className="font-medium">If you change your mind</p>
+            <p className="mt-1 text-sm text-neutral-600">
+              Keep this reference. It is the only way to have everything you
+              shared deleted, and we cannot show it to you again.
+            </p>
+            <code className="mt-3 block overflow-x-auto rounded bg-white px-3 py-2 font-mono text-xs">
+              {receipt.deletionToken}
+            </code>
+            <a
+              href={`/delete?token=${encodeURIComponent(receipt.deletionToken)}`}
+              className="mt-3 inline-block text-sm text-neutral-600 underline hover:text-neutral-900"
+            >
+              How to use it
+            </a>
+          </div>
+        )}
         {onContinue && (
           <button
             type="button"
@@ -359,6 +391,17 @@ export default function ReviewAndRelease({
             className="mt-8 rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white"
           >
             One last thing
+          </button>
+        )}
+        {returnTo && (
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = returnTo.complete
+            }}
+            className="mt-8 rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white"
+          >
+            Back to the survey
           </button>
         )}
       </section>
@@ -784,6 +827,15 @@ export default function ReviewAndRelease({
           {error && (
             <p className="mt-6 rounded-md bg-red-50 px-4 py-3 text-sm text-red-900">
               {error}
+            </p>
+          )}
+
+          {returnTo && (
+            <p className="mt-10 max-w-prose rounded-md bg-neutral-50 px-4 py-3 text-sm text-neutral-600">
+              After you release, you will be sent back to the survey you came
+              from and we will show you a reference on the way. Keep it - it is
+              how you have all of this deleted later, and we cannot look it up
+              for you.
             </p>
           )}
 

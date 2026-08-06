@@ -1,6 +1,7 @@
 import 'server-only'
 import { db } from './db'
 import type { SourceKind } from './records'
+import { issueDeletionToken } from './deletion'
 
 /**
  * Session persistence.
@@ -132,6 +133,13 @@ export interface ReleaseReceipt {
   sources: string[]
   earliest: string | null
   latest: string | null
+  /**
+   * Shown once, so they can have all of this removed later.
+   *
+   * Null when the session already has one - re-issuing would invalidate a
+   * token they may have written down.
+   */
+  deletionToken?: string | null
 }
 
 export async function persistRelease(
@@ -193,6 +201,15 @@ export async function persistRelease(
       await tx`update sessions set declined_at = now() where id = ${input.sessionId}`
     }
   })
+
+  // After the transaction: a failure to mint a token must not lose a release
+  // that has already been stored and receipted.
+  try {
+    receipt.deletionToken = await issueDeletionToken(input.sessionId)
+  } catch (error) {
+    console.error('deletion token failed', error)
+    receipt.deletionToken = null
+  }
 
   return receipt
 }

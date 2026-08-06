@@ -176,11 +176,13 @@ export async function responsesTable(
         declined_at: string | null
         screened_out_at: string | null
         reconciled_at: string | null
+        deleted_at: string | null
         records: number
       }[]
     >`
       select s.id, s.external_respondent_id, s.created_at, s.survey_done_at,
              s.released_at, s.declined_at, s.screened_out_at, s.reconciled_at,
+             s.deleted_at,
              (select count(*) from released_records r where r.session_id = s.id)::int as records
       from sessions s where s.study_slug = ${slug}
       order by s.created_at
@@ -211,7 +213,12 @@ export async function responsesTable(
     { name: 'session_id', label: 'Session' },
     { name: 'respondent_id', label: "Referring platform's id", values: 'Append studies only' },
     { name: 'started_at', label: 'Started' },
-    { name: 'status', label: 'How far they got', values: 'started, screened_out, surveyed, declined, released, reconciled' },
+    {
+      name: 'status',
+      label: 'How far they got',
+      values:
+        'started, screened_out, surveyed, declined, released, reconciled, deleted. A deleted case took part and later withdrew - the row is kept so the counts stay honest, and it is empty because we no longer hold anything.',
+    },
     { name: 'records_released', label: 'Records released' },
     { name: 'quality_failures', label: 'Quality checks failed' },
     { name: 'quality_checks', label: 'Quality checks run' },
@@ -250,7 +257,9 @@ export async function responsesTable(
 
     // The furthest point reached, not a flag per stage. One column an analyst
     // can filter beats six they have to combine.
-    const status = s.reconciled_at
+    const status = s.deleted_at
+      ? 'deleted'
+      : s.reconciled_at
       ? 'reconciled'
       : s.released_at
         ? 'released'
