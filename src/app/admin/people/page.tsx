@@ -2,6 +2,8 @@ import { requireUser, canEditStudies } from '@/lib/auth'
 import { peopleFor, orgsFor } from '@/lib/admin_store'
 import { pendingInvites } from '@/lib/invites'
 import InviteForm from './InviteForm'
+import ResetButton from './ResetButton'
+import { canReset } from '@/lib/resets'
 
 const ROLE_LABEL: Record<string, string> = {
   staff: 'Staff',
@@ -44,6 +46,7 @@ export default async function PeoplePage() {
                 <th className="px-4 py-3 font-medium">Organisation</th>
               )}
               <th className="px-4 py-3 font-medium">Last seen</th>
+              <th className="px-4 py-3 font-medium">Password</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-100">
@@ -70,6 +73,13 @@ export default async function PeoplePage() {
                   {p.lastSeenAt
                     ? new Date(p.lastSeenAt).toLocaleDateString()
                     : 'never'}
+                </td>
+                <td className="px-4 py-3">
+                  {canReset(user, { role: p.role as never, orgId: p.orgId }) ? (
+                    <ResetButton userId={p.id} email={p.email} />
+                  ) : (
+                    <span className="text-xs text-neutral-400">-</span>
+                  )}
                 </td>
               </tr>
             ))}

@@ -151,6 +151,7 @@ export interface PersonRow {
   email: string
   name: string | null
   role: string
+  orgId: string | null
   orgName: string | null
   lastSeenAt: string | null
   disabledAt: string | null
@@ -168,12 +169,13 @@ export async function peopleFor(user: User): Promise<PersonRow[]> {
       email: string
       name: string | null
       role: string
+      org_id: string | null
       org_name: string | null
       last_seen_at: string | null
       disabled_at: string | null
     }[]
   >`
-    select u.id, u.email, u.name, u.role, o.name as org_name,
+    select u.id, u.email, u.name, u.role, u.org_id, o.name as org_name,
            u.last_seen_at, u.disabled_at
     from users u
     left join orgs o on o.id = u.org_id
@@ -185,6 +187,7 @@ export async function peopleFor(user: User): Promise<PersonRow[]> {
     email: r.email,
     name: r.name,
     role: r.role,
+    orgId: r.org_id,
     orgName: r.org_name,
     lastSeenAt: r.last_seen_at,
     disabledAt: r.disabled_at,
