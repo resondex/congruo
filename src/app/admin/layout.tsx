@@ -39,10 +39,13 @@ export default async function AdminLayout({
             )}
           </nav>
           <div className="ml-auto flex items-center gap-4 text-sm">
-            <span className="text-neutral-500">
+            <Link
+              href="/admin/account"
+              className="text-neutral-500 hover:text-neutral-900"
+            >
               {user.email}
               {user.orgName ? ` · ${user.orgName}` : ' · staff'}
-            </span>
+            </Link>
             <SignOut />
           </div>
         </div>

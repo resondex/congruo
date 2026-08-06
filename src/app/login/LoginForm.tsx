@@ -1,12 +1,53 @@
 'use client'
 
 import { useState } from 'react'
+import { startAuthentication } from '@simplewebauthn/browser'
 
 export default function LoginForm({ next }: { next: string }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  /**
+   * Sign in with a passkey.
+   *
+   * No email is asked for and none is sent: the authenticator knows which key
+   * belongs to this site. That is the point - it is also why a copy of this
+   * page on another domain cannot use one, which no password or typed code can
+   * claim.
+   */
+  async function withPasskey() {
+    setBusy(true)
+    setError(null)
+    try {
+      const options = await fetch('/api/auth/passkey/login').then((r) => r.json())
+      if (options.error) {
+        setError(options.error)
+        return
+      }
+      const assertion = await startAuthentication({ optionsJSON: options })
+      const response = await fetch('/api/auth/passkey/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(assertion),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        setError(data.error ?? 'That passkey did not work.')
+        return
+      }
+      window.location.href = next
+    } catch (error) {
+      // Cancelling the system prompt lands here and is not a failure worth
+      // shouting about.
+      if ((error as Error)?.name !== 'NotAllowedError') {
+        setError('That passkey did not work.')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault()
@@ -70,6 +111,21 @@ export default function LoginForm({ next }: { next: string }) {
         className="w-full rounded-md bg-neutral-900 px-5 py-2.5 font-medium text-white disabled:opacity-50"
       >
         {busy ? 'Signing in…' : 'Sign in'}
+      </button>
+
+      <div className="flex items-center gap-3 py-1">
+        <span className="h-px flex-1 bg-neutral-200" />
+        <span className="text-xs text-neutral-400">or</span>
+        <span className="h-px flex-1 bg-neutral-200" />
+      </div>
+
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void withPasskey()}
+        className="w-full rounded-md border border-neutral-300 px-5 py-2.5 font-medium hover:border-neutral-500 disabled:opacity-50"
+      >
+        Use a passkey
       </button>
 
       <a
