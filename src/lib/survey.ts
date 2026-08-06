@@ -28,6 +28,9 @@ export type QuestionType =
   | 'scale'
   | 'number'
   | 'text'
+  | 'date'
+  | 'ranking'
+  | 'allocation'
   | 'section'
   | 'description'
   | 'media'
@@ -39,6 +42,9 @@ const ANSWERABLE = new Set<QuestionType>([
   'scale',
   'number',
   'text',
+  'date',
+  'ranking',
+  'allocation',
 ])
 
 export const isAnswerable = (type: QuestionType) => ANSWERABLE.has(type)
@@ -87,6 +93,28 @@ export type Claim =
   | { kind: 'search_frequency'; sources: SourceKind[]; windowDays: number }
   /** A yes claims at least one record matching the terms. */
   | { kind: 'topic_search'; terms: string[]; windowDays: number }
+  /**
+   * The date given claims that is when they last did it. Compared against the
+   * most recent matching record - the only claim here about *when* rather than
+   * how much, and the one people are worst at.
+   */
+  | {
+      kind: 'recency'
+      sources: SourceKind[]
+      terms?: string[]
+    }
+  /**
+   * The order given claims that is how much they use each, most first. Compared
+   * against the ordering by record count. A relative claim, which people answer
+   * far better than they answer a count.
+   */
+  | { kind: 'rank_frequency'; windowDays: number }
+  /**
+   * The split given claims that is how their activity divides. Compared
+   * against the actual composition of records, which is what a client usually
+   * means when they ask about share.
+   */
+  | { kind: 'share'; windowDays: number }
 
 export interface Question {
   code: string
@@ -180,6 +208,8 @@ export type AnswerValue =
   | { kind: 'order'; codes: number[] }
   /** Allocation: option code to quantity. */
   | { kind: 'allocation'; parts: Record<number, number> }
+  /** A calendar day, as yyyy-mm-dd. No time, because nobody remembers one. */
+  | { kind: 'date'; value: string }
 
 export type Answers = Record<string, AnswerValue | undefined>
 
@@ -382,6 +412,57 @@ export function validateAnswer(
       }
       if (question.type === 'scale' && !Number.isInteger(answer.value)) {
         return 'Choose one of the points.'
+      }
+      return null
+    }
+
+    case 'date': {
+      if (answer.kind !== 'date') return 'Expected a date.'
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(answer.value)) return 'That is not a date.'
+      const at = new Date(`${answer.value}T00:00:00Z`).getTime()
+      if (Number.isNaN(at)) return 'That is not a date.'
+      // A date in the future is not a memory, it is a typo.
+      if (at > Date.now() + 86400_000) return 'That day has not happened yet.'
+      return null
+    }
+
+    case 'ranking': {
+      if (answer.kind !== 'order') return 'Expected an order.'
+      const offered = new Set(question.options.map((o) => o.code))
+      for (const code of answer.codes) {
+        if (!offered.has(code)) return 'That is not one of the options.'
+      }
+      if (new Set(answer.codes).size !== answer.codes.length) {
+        return 'Something is ranked twice.'
+      }
+      // Partial orders are allowed - a top-three is a real question - but a
+      // half-finished drag is not, so anything started must be finished up to
+      // the limit the author set.
+      const wanted = question.maxSelections ?? question.options.length
+      if (answer.codes.length && answer.codes.length < wanted) {
+        return `Put ${wanted} in order.`
+      }
+      if (!answer.codes.length && question.required) {
+        return 'This one is needed to continue.'
+      }
+      return null
+    }
+
+    case 'allocation': {
+      if (answer.kind !== 'allocation') return 'Expected an allocation.'
+      const offered = new Set(question.options.map((o) => o.code))
+      let total = 0
+      for (const [code, amount] of Object.entries(answer.parts)) {
+        if (!offered.has(Number(code))) return 'That is not one of the options.'
+        if (!Number.isFinite(amount) || amount < 0) return 'Use whole amounts.'
+        total += amount
+      }
+      // The total is the point of the type: a split that does not add up is
+      // not a split, and letting it through would deliver shares that cannot
+      // be compared to anything.
+      const target = question.max ?? 100
+      if (total !== target) {
+        return `That adds up to ${total}. It needs to be ${target}.`
       }
       return null
     }

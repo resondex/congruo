@@ -393,6 +393,139 @@ function Field({
         />
       )
 
+    case 'date': {
+      const value = answer?.kind === 'date' ? answer.value : ''
+      return (
+        <input
+          type="date"
+          // No future dates: the question always asks about something that has
+          // already happened, and the picker should say so rather than the
+          // validator.
+          max={new Date().toISOString().slice(0, 10)}
+          value={value}
+          onChange={(e) =>
+            onAnswer(e.target.value ? { kind: 'date', value: e.target.value } : undefined)
+          }
+          className="rounded-lg border border-neutral-300 px-4 py-3 focus:border-neutral-900 focus:outline-none"
+        />
+      )
+    }
+
+    case 'ranking': {
+      const order = answer?.kind === 'order' ? answer.codes : []
+      const unranked = question.options.filter((o) => !order.includes(o.code))
+      const wanted = question.maxSelections ?? question.options.length
+
+      /**
+       * Tap to rank, tap again to unrank. Not drag and drop: dragging on a
+       * touch screen fights the page scroll, and this is answered on a phone.
+       */
+      return (
+        <div className="space-y-3">
+          {order.length > 0 && (
+            <ol className="space-y-2">
+              {order.map((code, i) => {
+                const option = question.options.find((o) => o.code === code)
+                return (
+                  <li key={code}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onAnswer({
+                          kind: 'order',
+                          codes: order.filter((c) => c !== code),
+                        })
+                      }
+                      className="flex w-full items-center gap-3 rounded-lg border border-neutral-900 bg-neutral-50 px-4 py-3 text-left"
+                    >
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-neutral-900 text-xs text-white tabular-nums">
+                        {i + 1}
+                      </span>
+                      <span className="flex-1">{option?.label}</span>
+                      <span className="text-xs text-neutral-500">remove</span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ol>
+          )}
+
+          {order.length < wanted && unranked.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-neutral-500">
+                {order.length === 0
+                  ? 'Tap them in order, most first.'
+                  : `Next: number ${order.length + 1}`}
+              </p>
+              {unranked.map((option) => (
+                <button
+                  key={option.code}
+                  type="button"
+                  onClick={() =>
+                    onAnswer({ kind: 'order', codes: [...order, option.code] })
+                  }
+                  className="w-full rounded-lg border border-neutral-200 px-4 py-3 text-left transition hover:border-neutral-400"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    case 'allocation': {
+      const parts = answer?.kind === 'allocation' ? answer.parts : {}
+      const target = question.max ?? 100
+      const used = Object.values(parts).reduce((sum, n) => sum + n, 0)
+      const left = target - used
+
+      return (
+        <div className="space-y-3">
+          {question.options.map((option) => (
+            <div key={option.code} className="flex items-center gap-3">
+              <label className="flex-1 text-sm">{option.label}</label>
+              <input
+                type="number"
+                min={0}
+                max={target}
+                inputMode="numeric"
+                value={parts[option.code] ?? ''}
+                onChange={(e) => {
+                  const next = { ...parts }
+                  if (e.target.value === '') delete next[option.code]
+                  else next[option.code] = Number(e.target.value)
+                  onAnswer(
+                    Object.keys(next).length
+                      ? { kind: 'allocation', parts: next }
+                      : undefined
+                  )
+                }}
+                className="w-24 rounded-md border border-neutral-300 px-3 py-2 text-right tabular-nums focus:border-neutral-900 focus:outline-none"
+              />
+            </div>
+          ))}
+          {/*
+            The remaining amount, always visible. This type fails when someone
+            cannot tell how far off they are, and making them do the arithmetic
+            is how a form gets abandoned.
+          */}
+          <p
+            className={`text-sm tabular-nums ${
+              left === 0 ? 'text-green-700' : 'text-neutral-600'
+            }`}
+          >
+            {left === 0
+              ? `That is all ${target}.`
+              : left > 0
+                ? `${left} left to give out.`
+                : `${-left} too many.`}
+          </p>
+        </div>
+      )
+    }
+
     case 'text':
       return (
         <textarea

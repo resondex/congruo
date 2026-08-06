@@ -141,6 +141,31 @@ function matchesTerms(text: string, terms: string[]): boolean {
 }
 
 /**
+ * How far a remembered date may be off before it is worth raising.
+ *
+ * People are poor at recency and get worse the further back it goes: "about a
+ * week" and "about a month" are honest answers with very different precision.
+ * So the tolerance grows with the gap - a quarter of however long ago they say
+ * it was, and never less than a week. Being out by three days about something
+ * last March is not a discrepancy worth putting to anyone.
+ */
+function datesAgree(claimed: Date, observed: Date, now: Date): boolean {
+  const gap = Math.abs(claimed.getTime() - observed.getTime())
+  const claimedAgo = Math.abs(now.getTime() - claimed.getTime())
+  return gap <= Math.max(7 * DAY, claimedAgo * 0.25)
+}
+
+const shortDate = (d: Date) =>
+  d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+
+/** Sources a question's options name, in the order the options are written. */
+function sourcesOf(question: Question): SourceKind[] {
+  return question.options
+    .map((o) => o.mapsTo as SourceKind)
+    .filter(Boolean)
+}
+
+/**
  * Builds the comparisons to put to the respondent.
  *
  * Questions with no claim are skipped: without a declared correspondence there
@@ -217,6 +242,152 @@ export function reconcile(input: ReconcileInput): Comparison[] {
           claimed: `about ${answer.value}`,
           observed: `${relevant.length} in what you shared`,
           agrees: countsAgree(answer.value, relevant.length),
+          caveats,
+        })
+        break
+      }
+
+      case 'recency': {
+        if (answer.kind !== 'date') continue
+
+        const matching = records.filter(
+          (r) =>
+            claim.sources.includes(r.source) &&
+            (!claim.terms?.length || matchesTerms(r.text, claim.terms))
+        )
+        if (!matching.length) {
+          // Nothing to have been recent. Saying "you last did this never" to
+          // someone who told us a date would be an accusation built entirely
+          // out of our own missing data.
+          caveats.push('source_absent')
+          out.push({
+            questionCode: question.code,
+            prompt: question.prompt,
+            kind: claim.kind,
+            claimed: shortDate(new Date(`${answer.value}T00:00:00Z`)),
+            observed: 'nothing matching in what you shared',
+            agrees: false,
+            caveats,
+          })
+          break
+        }
+
+        const latest = new Date(
+          Math.max(...matching.map((r) => new Date(r.occurredAt).getTime()))
+        )
+        const claimed = new Date(`${answer.value}T00:00:00Z`)
+
+        out.push({
+          questionCode: question.code,
+          prompt: question.prompt,
+          kind: claim.kind,
+          claimed: shortDate(claimed),
+          observed: shortDate(latest),
+          agrees: datesAgree(claimed, latest, releasedAt),
+          caveats,
+        })
+        break
+      }
+
+      case 'rank_frequency': {
+        if (answer.kind !== 'order') continue
+
+        const byCode = new Map(question.options.map((o) => [o.code, o.mapsTo]))
+        const ranked = answer.codes
+          .map((c) => byCode.get(c) as SourceKind)
+          .filter((s) => s && input.grantedSources.includes(s))
+        if (ranked.length < 2) continue
+
+        const counts = new Map<SourceKind, number>()
+        for (const source of sourcesOf(question)) counts.set(source, 0)
+        for (const record of records) {
+          if (!counts.has(record.source)) continue
+          if (!withinWindow(record, releasedAt, claim.windowDays)) continue
+          counts.set(record.source, (counts.get(record.source) ?? 0) + 1)
+        }
+        const actual = [...counts.entries()]
+          .filter(([s]) => ranked.includes(s))
+          .sort((a, b) => b[1] - a[1])
+          .map(([s]) => s)
+
+        if (coverageIsShort(records, releasedAt, claim.windowDays)) {
+          caveats.push('short_coverage')
+        }
+        if (!records.length) caveats.push('source_absent')
+
+        const label = (s: SourceKind) => SOURCE_LABELS[s] ?? s
+        // Agreement is on what they put first, not on the whole order. Getting
+        // the tail of a ranking wrong is ordinary; being wrong about what you
+        // use most is the finding.
+        out.push({
+          questionCode: question.code,
+          prompt: question.prompt,
+          kind: claim.kind,
+          claimed: ranked.map(label).join(' > '),
+          observed: actual.length ? actual.map(label).join(' > ') : 'nothing to order',
+          agrees: Boolean(actual.length) && ranked[0] === actual[0],
+          caveats,
+        })
+        break
+      }
+
+      case 'share': {
+        if (answer.kind !== 'allocation') continue
+
+        const byCode = new Map(question.options.map((o) => [o.code, o.mapsTo]))
+        const claimedShare = new Map<SourceKind, number>()
+        let claimedTotal = 0
+        for (const [code, amount] of Object.entries(answer.parts)) {
+          const source = byCode.get(Number(code)) as SourceKind
+          if (!source || !input.grantedSources.includes(source)) continue
+          claimedShare.set(source, amount)
+          claimedTotal += amount
+        }
+        if (!claimedTotal) continue
+
+        const counts = new Map<SourceKind, number>()
+        let observedTotal = 0
+        for (const source of claimedShare.keys()) counts.set(source, 0)
+        for (const record of records) {
+          if (!counts.has(record.source)) continue
+          if (!withinWindow(record, releasedAt, claim.windowDays)) continue
+          counts.set(record.source, (counts.get(record.source) ?? 0) + 1)
+          observedTotal++
+        }
+
+        if (coverageIsShort(records, releasedAt, claim.windowDays)) {
+          caveats.push('short_coverage')
+        }
+        if (!observedTotal) caveats.push('source_absent')
+
+        const pct = (n: number, total: number) =>
+          total ? Math.round((n / total) * 100) : 0
+        const label = (s: SourceKind) => SOURCE_LABELS[s] ?? s
+        const asText = (get: (s: SourceKind) => number) =>
+          [...claimedShare.keys()]
+            .map((s) => `${label(s)} ${get(s)}%`)
+            .join(', ')
+
+        // Fifteen points, because a share is an impression rather than a
+        // measurement and nobody means 40 exactly when they say 40.
+        const agrees =
+          observedTotal > 0 &&
+          [...claimedShare.entries()].every(
+            ([source, amount]) =>
+              Math.abs(
+                pct(amount, claimedTotal) - pct(counts.get(source) ?? 0, observedTotal)
+              ) <= 15
+          )
+
+        out.push({
+          questionCode: question.code,
+          prompt: question.prompt,
+          kind: claim.kind,
+          claimed: asText((s) => pct(claimedShare.get(s) ?? 0, claimedTotal)),
+          observed: observedTotal
+            ? asText((s) => pct(counts.get(s) ?? 0, observedTotal))
+            : 'nothing in what you shared',
+          agrees,
           caveats,
         })
         break

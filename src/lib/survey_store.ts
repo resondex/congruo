@@ -144,7 +144,7 @@ export async function persistSurvey(
         question_code: code,
         row_code: row ? Number(row) : NO_ROW,
         value_text:
-          answer.kind === 'text'
+          answer.kind === 'text' || answer.kind === 'date'
             ? answer.value
             : // The verbatim beside an "other" selection, which is a second
               // column of the same answer rather than a separate one.

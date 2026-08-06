@@ -47,6 +47,24 @@ function toAnswer(row: AnswerRow, type: QuestionType): AnswerValue | undefined {
       return row.value_text === null
         ? undefined
         : { kind: 'text', value: row.value_text }
+    case 'date':
+      return row.value_text === null
+        ? undefined
+        : { kind: 'date', value: row.value_text }
+    case 'ranking':
+      return row.value_json?.order
+        ? { kind: 'order', codes: row.value_json.order }
+        : undefined
+    case 'allocation':
+      return row.value_json?.parts
+        ? { kind: 'allocation', parts: row.value_json.parts }
+        : undefined
+    // Elements collect nothing, so there is nothing to rebuild.
+    case 'section':
+    case 'description':
+    case 'media':
+    case 'terminal':
+      return undefined
   }
 }
 

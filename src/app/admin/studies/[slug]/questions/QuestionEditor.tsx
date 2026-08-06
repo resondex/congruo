@@ -57,6 +57,9 @@ const TYPES: { value: QType; label: string; group: string }[] = [
   { value: 'scale', label: 'Scale', group: 'Asks something' },
   { value: 'number', label: 'Number', group: 'Asks something' },
   { value: 'text', label: 'Open text', group: 'Asks something' },
+  { value: 'date', label: 'A date', group: 'Asks something' },
+  { value: 'ranking', label: 'Put in order', group: 'Asks something' },
+  { value: 'allocation', label: 'Split 100 points', group: 'Asks something' },
   { value: 'section', label: 'Section heading', group: 'Shows something' },
   { value: 'description', label: 'Explanatory text', group: 'Shows something' },
   { value: 'media', label: 'Image', group: 'Shows something' },
@@ -392,12 +395,62 @@ export default function QuestionEditor({
                     </div>
                   )}
 
-                  {(q.type === 'single' || q.type === 'multiple') && (
+                  {['single', 'multiple', 'ranking', 'allocation'].includes(
+                    q.type
+                  ) && (
                     <Options
                       question={q}
                       readOnly={readOnly}
                       onChange={(patch) => change(index, patch)}
                     />
+                  )}
+
+                  {q.type === 'allocation' && (
+                    <label className="block">
+                      <span className="text-xs font-medium text-neutral-700">
+                        Points to divide
+                      </span>
+                      <input
+                        type="number"
+                        min={1}
+                        disabled={readOnly}
+                        value={q.max ?? 100}
+                        onChange={(e) =>
+                          change(index, { max: Number(e.target.value) || 100 })
+                        }
+                        className="mt-1 block w-28 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                      />
+                      <span className="mt-1 block text-xs text-neutral-500">
+                        They must give out exactly this much.
+                      </span>
+                    </label>
+                  )}
+
+                  {q.type === 'ranking' && (
+                    <label className="block">
+                      <span className="text-xs font-medium text-neutral-700">
+                        How many to rank
+                      </span>
+                      <input
+                        type="number"
+                        min={2}
+                        disabled={readOnly}
+                        value={q.maxSelections ?? ''}
+                        placeholder={String(q.options.length || 'all')}
+                        onChange={(e) =>
+                          change(index, {
+                            maxSelections: e.target.value
+                              ? Number(e.target.value)
+                              : null,
+                          })
+                        }
+                        className="mt-1 block w-28 rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                      />
+                      <span className="mt-1 block text-xs text-neutral-500">
+                        Leave empty to rank them all. A top three is often a
+                        better question than a full order.
+                      </span>
+                    </label>
                   )}
 
                   {(q.type === 'scale' || q.type === 'number') && (
@@ -732,6 +785,11 @@ function ClaimEditor({
           if (next === 'source_use') return onChange({ kind: 'source_use' })
           if (next === 'search_frequency')
             return onChange({ kind: 'search_frequency', sources: [], windowDays: 30 })
+          if (next === 'recency')
+            return onChange({ kind: 'recency', sources: [], terms: [] })
+          if (next === 'rank_frequency')
+            return onChange({ kind: 'rank_frequency', windowDays: 30 })
+          if (next === 'share') return onChange({ kind: 'share', windowDays: 30 })
           onChange({ kind: 'topic_search', terms: [], windowDays: 30 })
         }}
         className="mt-2 block rounded-md border border-neutral-300 px-2 py-1 text-xs"
@@ -746,11 +804,29 @@ function ClaimEditor({
         <option value="topic_search">
           Whether they looked into a topic - yes means at least one match
         </option>
+        <option value="recency">
+          When they last did it - compared to the most recent matching record
+        </option>
+        <option value="rank_frequency">
+          Their order of use - compared to the order by record count
+        </option>
+        <option value="share">
+          How their activity splits - compared to the share of records
+        </option>
       </select>
 
-      {kind === 'search_frequency' && (
+      {(kind === 'rank_frequency' || kind === 'share') && (
+        <p className="mt-3 text-xs text-neutral-600">
+          Each option must say what it means - set that beside the option above,
+          to a source name. The order or split is compared across exactly those.
+        </p>
+      )}
+
+      {(kind === 'search_frequency' || kind === 'recency') && (
         <div className="mt-3">
-          <span className="text-xs text-neutral-700">Count records from</span>
+          <span className="text-xs text-neutral-700">
+            {kind === 'recency' ? 'Look for the most recent in' : 'Count records from'}
+          </span>
           <div className="mt-1 flex flex-wrap gap-2">
             {CLAIM_SOURCES.map((s) => (
               <label
@@ -782,10 +858,12 @@ function ClaimEditor({
         </div>
       )}
 
-      {kind === 'topic_search' && (
+      {(kind === 'topic_search' || kind === 'recency') && (
         <label className="mt-3 block">
           <span className="text-xs text-neutral-700">
-            Words that count as a match
+            {kind === 'recency'
+              ? 'Words that narrow it, if any'
+              : 'Words that count as a match'}
           </span>
           <input
             disabled={readOnly}
@@ -805,7 +883,7 @@ function ClaimEditor({
         </label>
       )}
 
-      {kind !== 'none' && kind !== 'source_use' && (
+      {kind !== 'none' && kind !== 'source_use' && kind !== 'recency' && (
         <label className="mt-3 block">
           <span className="text-xs text-neutral-700">Over the last</span>
           <input

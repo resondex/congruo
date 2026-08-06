@@ -54,6 +54,8 @@ function readAnswer(raw: unknown): AnswerValue | null {
       return typeof value === 'number' ? { kind: 'number', value } : null
     case 'text':
       return typeof value === 'string' ? { kind: 'text', value } : null
+    case 'date':
+      return typeof value === 'string' ? { kind: 'date', value } : null
     default:
       return null
   }

@@ -53,6 +53,7 @@ function choicesOf(answer: AnswerValue): string[] {
         .filter(([, amount]) => amount > 0)
         .map(([code]) => code)
     case 'text':
+    case 'date':
       return [answer.value]
     case 'number':
       return [String(answer.value)]
@@ -73,6 +74,7 @@ function isAnswered(answer: AnswerValue | undefined): boolean {
     case 'allocation':
       return Object.keys(answer.parts).length > 0
     case 'text':
+    case 'date':
       return answer.value.trim().length > 0
     default:
       return true

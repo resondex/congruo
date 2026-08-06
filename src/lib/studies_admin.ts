@@ -133,6 +133,9 @@ export interface QuestionInput {
     | 'scale'
     | 'number'
     | 'text'
+    | 'date'
+    | 'ranking'
+    | 'allocation'
     | 'section'
     | 'description'
     | 'media'
@@ -205,8 +208,14 @@ export async function replaceQuestions(
     if (!q.prompt.trim() && q.type !== 'media') {
       return { error: `${q.code} has no text.` }
     }
-    if ((q.type === 'single' || q.type === 'multiple') && !q.options.length) {
+    if (
+      ['single', 'multiple', 'ranking', 'allocation'].includes(q.type) &&
+      !q.options.length
+    ) {
       return { error: `${q.code} needs at least one option.` }
+    }
+    if (q.type === 'ranking' && q.options.length < 2) {
+      return { error: `${q.code} needs at least two things to put in order.` }
     }
     if (q.type === 'media' && !q.mediaUrl) {
       return { error: `${q.code} is an image with no image.` }
