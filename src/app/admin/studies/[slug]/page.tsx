@@ -68,6 +68,12 @@ export default async function StudyPage({
             {editable ? 'Edit questions' : 'View questions'}
           </Link>
           <Link
+            href={`/admin/studies/${slug}/variables`}
+            className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium hover:border-neutral-500"
+          >
+            Variables
+          </Link>
+          <Link
             href={`/admin/studies/${slug}/data`}
             className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white"
           >

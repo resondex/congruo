@@ -75,6 +75,26 @@ function readQuestion(raw: unknown, index: number): QuestionInput | { error: str
     }
   }
 
+  // Checked rather than trusted: a malformed check would run against every
+  // respondent and silently pass or fail all of them.
+  let quality: Record<string, unknown> | null = null
+  if (q.qualityCheck && typeof q.qualityCheck === 'object') {
+    const { kind, expect, of } = q.qualityCheck as Record<string, unknown>
+    const kinds = ['attention', 'red_herring', 'duplicate', 'gibberish']
+    if (typeof kind !== 'string' || !kinds.includes(kind)) {
+      return { error: `Question ${q.code} has an unknown quality check.` }
+    }
+    if (kind === 'attention') {
+      if (!Array.isArray(expect) || !expect.length || !expect.every((c) => typeof c === 'number')) {
+        return { error: `Question ${q.code} is an attention check with no passing answer.` }
+      }
+    }
+    if (kind === 'duplicate' && (typeof of !== 'string' || !of)) {
+      return { error: `Question ${q.code} must say which question it duplicates.` }
+    }
+    quality = q.qualityCheck as Record<string, unknown>
+  }
+
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
   const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
 
@@ -98,7 +118,7 @@ function readQuestion(raw: unknown, index: number): QuestionInput | { error: str
     matrixRows: null,
     mediaUrl: str(q.mediaUrl),
     mediaAlt: str(q.mediaAlt),
-    qualityCheck: (q.qualityCheck as Record<string, unknown>) ?? null,
+    qualityCheck: quality,
     claim: (q.claim as Record<string, unknown>) ?? null,
     showIf: (q.showIf as Record<string, unknown>) ?? null,
     terminateIf: (q.terminateIf as Record<string, unknown>) ?? null,
