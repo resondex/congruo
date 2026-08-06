@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { headers } from 'next/headers'
 import { notFound } from 'next/navigation'
 import { requireUser, canEditStudies } from '@/lib/auth'
 import { studyFor, orgsFor } from '@/lib/admin_store'
@@ -28,14 +29,19 @@ export default async function StudyPage({
 
   // In parallel: none of these depends on another, and each is a round trip to
   // a database roughly 40ms away. Awaited one at a time they were the page.
-  const [summary, study, orgs] = await Promise.all([
+  const [summary, study, orgs, head] = await Promise.all([
     studyFor(user, slug),
     // The respondent-facing record, for fields the summary does not carry.
     getStudy(slug),
     orgsFor(user),
+    headers(),
   ])
   if (!summary) notFound()
   const editable = canEditStudies(user)
+
+  // Behind Vercel this is https; on localhost the header is absent and it is
+  // http, which is what the respondent link has to say to be clickable.
+  const origin = `${head.get('x-forwarded-proto') ?? 'http'}://${head.get('host')}`
 
   const rate = summary.surveyed
     ? Math.round((summary.released / summary.surveyed) * 100)
@@ -70,7 +76,7 @@ export default async function StudyPage({
         </div>
       </div>
 
-      <StudyLink slug={slug} mode={summary.mode} />
+      <StudyLink slug={slug} mode={summary.mode} origin={origin} />
 
       <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Started" value={summary.started.toLocaleString()} />

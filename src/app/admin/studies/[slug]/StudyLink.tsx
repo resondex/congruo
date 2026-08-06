@@ -3,18 +3,24 @@
 import { useState } from 'react'
 
 /**
- * The link a respondent is sent, built in the browser so it carries whatever
- * host this deployment is actually being used under.
+ * The link a respondent is sent.
+ *
+ * The origin comes from the server rather than from window, which is what this
+ * did first: the server rendered "/s/dev" and the browser rendered
+ * "http://localhost:3300/s/dev", and React threw out the tree and rebuilt it.
+ * Reading the request host on the server gives both sides the same string, and
+ * still carries whatever host the deployment is actually being used under.
  */
 export default function StudyLink({
   slug,
   mode,
+  origin,
 }: {
   slug: string
   mode: 'full_service' | 'append'
+  origin: string
 }) {
   const [copied, setCopied] = useState(false)
-  const origin = typeof window === 'undefined' ? '' : window.location.origin
   const url =
     mode === 'append'
       ? `${origin}/capture/start?study=${slug}&rid=RESPONDENT_ID&return=YOUR_RETURN_URL`
