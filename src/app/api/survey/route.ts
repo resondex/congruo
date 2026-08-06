@@ -3,6 +3,9 @@ import { getStudy } from '@/lib/studies'
 import { dbConfigured } from '@/lib/db'
 import { findOrCreateSession } from '@/lib/sessions'
 import { getQuestions, persistSurvey } from '@/lib/survey_store'
+import { variablesFor, persistVariables, persistQuality } from '@/lib/variables_store'
+import { derive } from '@/lib/variables'
+import { runQualityChecks } from '@/lib/quality'
 import {
   pruneAnswers,
   terminatedBy,
@@ -168,6 +171,22 @@ export async function POST(request: NextRequest) {
       sessionId as string | undefined
     )
     const { answered } = await persistSurvey(session.id, parsed, !!terminator)
+
+    // After the answers are safely stored, and never in a way that can fail
+    // the submission: a respondent must not lose a completed interview because
+    // a derived variable's rule was malformed.
+    try {
+      const shown = new Set(visibleQuestions(questions, parsed).map((q) => q.code))
+      await Promise.all([
+        persistQuality(
+          session.id,
+          runQualityChecks(questions, parsed, (code) => shown.has(code))
+        ),
+        persistVariables(session.id, derive(await variablesFor(studySlug), parsed)),
+      ])
+    } catch (error) {
+      console.error('post-survey variables or quality failed', error)
+    }
     return Response.json(
       {
         recorded: true,

@@ -24,7 +24,7 @@ import { useState } from 'react'
 import { SOURCE_LABELS, type SourceKind } from '@/lib/records'
 import type { Condition, Operator } from '@/lib/conditions'
 
-type QType = 'single' | 'multiple' | 'scale' | 'number' | 'text'
+import { isAnswerable, type QuestionType as QType } from '@/lib/survey'
 
 export interface EditableQuestion {
   code: string
@@ -33,6 +33,9 @@ export interface EditableQuestion {
   prompt: string
   help: string | null
   options: { code: number; label: string; mapsTo?: string; exclusive?: boolean }[]
+  mediaUrl: string | null
+  mediaAlt: string | null
+  qualityCheck: Record<string, unknown> | null
   allowOther: boolean
   allowPreferNotToSay: boolean
   minSelections: number | null
@@ -47,12 +50,16 @@ export interface EditableQuestion {
   terminateIf: Record<string, unknown> | null
 }
 
-const TYPES: { value: QType; label: string; hint: string }[] = [
-  { value: 'single', label: 'One choice', hint: 'Radio buttons' },
-  { value: 'multiple', label: 'Several choices', hint: 'Checkboxes' },
-  { value: 'scale', label: 'Scale', hint: 'Numbered points with end labels' },
-  { value: 'number', label: 'Number', hint: 'A count or estimate' },
-  { value: 'text', label: 'Open text', hint: 'In their own words' },
+const TYPES: { value: QType; label: string; group: string }[] = [
+  { value: 'single', label: 'One choice', group: 'Asks something' },
+  { value: 'multiple', label: 'Several choices', group: 'Asks something' },
+  { value: 'scale', label: 'Scale', group: 'Asks something' },
+  { value: 'number', label: 'Number', group: 'Asks something' },
+  { value: 'text', label: 'Open text', group: 'Asks something' },
+  { value: 'section', label: 'Section heading', group: 'Shows something' },
+  { value: 'description', label: 'Explanatory text', group: 'Shows something' },
+  { value: 'media', label: 'Image', group: 'Shows something' },
+  { value: 'terminal', label: 'End the survey here', group: 'Shows something' },
 ]
 
 const OPERATORS: { value: Operator; label: string; needsValue: boolean }[] = [
@@ -158,6 +165,9 @@ export default function QuestionEditor({
           { code: 1, label: 'Yes', mapsTo: 'yes' },
           { code: 2, label: 'No', mapsTo: 'no' },
         ],
+        mediaUrl: null,
+        mediaAlt: null,
+        qualityCheck: null,
         allowOther: false,
         allowPreferNotToSay: false,
         minSelections: null,
@@ -249,6 +259,7 @@ export default function QuestionEditor({
                   <span className="text-xs text-neutral-500">
                     {q.code} · page {q.page + 1} ·{' '}
                     {TYPES.find((t) => t.value === q.type)?.label}
+                    {!isAnswerable(q.type) ? ' · collects nothing' : ''}
                     {q.showIf ? ' · conditional' : ''}
                     {q.terminateIf ? ' · can end the survey' : ''}
                     {q.claim ? ' · reconciled' : ''}
@@ -322,10 +333,14 @@ export default function QuestionEditor({
                         }
                         className="mt-1 block rounded-md border border-neutral-300 px-3 py-2 text-sm"
                       >
-                        {TYPES.map((t) => (
-                          <option key={t.value} value={t.value}>
-                            {t.label}
-                          </option>
+                        {['Asks something', 'Shows something'].map((group) => (
+                          <optgroup key={group} label={group}>
+                            {TYPES.filter((t) => t.group === group).map((t) => (
+                              <option key={t.value} value={t.value}>
+                                {t.label}
+                              </option>
+                            ))}
+                          </optgroup>
                         ))}
                       </select>
                     </label>
@@ -346,22 +361,32 @@ export default function QuestionEditor({
                         className="mt-1 block w-24 rounded-md border border-neutral-300 px-3 py-2 text-sm"
                       />
                     </label>
-                    <label className="flex items-end gap-2 pb-2 text-sm">
-                      <input
-                        type="checkbox"
-                        disabled={readOnly}
-                        checked={q.required}
-                        onChange={(e) =>
-                          change(index, { required: e.target.checked })
-                        }
-                      />
-                      Required
-                    </label>
+                    {isAnswerable(q.type) && (
+                      <label className="flex items-end gap-2 pb-2 text-sm">
+                        <input
+                          type="checkbox"
+                          disabled={readOnly}
+                          checked={q.required}
+                          onChange={(e) =>
+                            change(index, { required: e.target.checked })
+                          }
+                        />
+                        Required
+                      </label>
+                    )}
                   </div>
 
                   <label className="block">
                     <span className="text-xs font-medium text-neutral-700">
-                      Question
+                      {q.type === 'section'
+                        ? 'Heading'
+                        : q.type === 'description'
+                          ? 'Text to show'
+                          : q.type === 'media'
+                            ? 'Caption'
+                            : q.type === 'terminal'
+                              ? 'What to say as it ends'
+                              : 'Question'}
                     </span>
                     <textarea
                       rows={2}
@@ -385,6 +410,38 @@ export default function QuestionEditor({
                       className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
                     />
                   </label>
+
+                  {q.type === 'media' && (
+                    <div className="flex flex-wrap gap-3">
+                      <label className="min-w-64 flex-1">
+                        <span className="text-xs font-medium text-neutral-700">
+                          Image address
+                        </span>
+                        <input
+                          disabled={readOnly}
+                          value={q.mediaUrl ?? ''}
+                          placeholder="https://…"
+                          onChange={(e) =>
+                            change(index, { mediaUrl: e.target.value || null })
+                          }
+                          className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                      <label className="min-w-48 flex-1">
+                        <span className="text-xs font-medium text-neutral-700">
+                          Described, for anyone who cannot see it
+                        </span>
+                        <input
+                          disabled={readOnly}
+                          value={q.mediaAlt ?? ''}
+                          onChange={(e) =>
+                            change(index, { mediaAlt: e.target.value || null })
+                          }
+                          className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
+                        />
+                      </label>
+                    </div>
+                  )}
 
                   {(q.type === 'single' || q.type === 'multiple') && (
                     <Options
@@ -470,11 +527,13 @@ export default function QuestionEditor({
                     onChange={(terminateIf) => change(index, { terminateIf })}
                   />
 
-                  <ClaimEditor
-                    claim={q.claim}
-                    readOnly={readOnly}
-                    onChange={(claim) => change(index, { claim })}
-                  />
+                  {isAnswerable(q.type) && (
+                    <ClaimEditor
+                      claim={q.claim}
+                      readOnly={readOnly}
+                      onChange={(claim) => change(index, { claim })}
+                    />
+                  )}
                 </div>
               )}
             </li>

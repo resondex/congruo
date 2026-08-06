@@ -13,7 +13,35 @@
 import type { SourceKind } from './records'
 import { evaluate, referencedCodes, type Condition } from './conditions'
 
-export type QuestionType = 'single' | 'multiple' | 'scale' | 'number' | 'text'
+/**
+ * Everything that can sit in an instrument, answerable or not.
+ *
+ * Headings, prose, an image and an ending share the list with the questions
+ * because they share the ordering and the branching - a paragraph only some
+ * respondents need is an ordinary thing to want. What separates them is that
+ * they collect nothing, which both the renderer and the validator read off the
+ * type rather than being told separately.
+ */
+export type QuestionType =
+  | 'single'
+  | 'multiple'
+  | 'scale'
+  | 'number'
+  | 'text'
+  | 'section'
+  | 'description'
+  | 'media'
+  | 'terminal'
+
+const ANSWERABLE = new Set<QuestionType>([
+  'single',
+  'multiple',
+  'scale',
+  'number',
+  'text',
+])
+
+export const isAnswerable = (type: QuestionType) => ANSWERABLE.has(type)
 
 /**
  * An option, split into the part that must never move and the part that is
@@ -93,6 +121,22 @@ export interface Question {
   allowPreferNotToSay?: boolean
   minSelections?: number
   maxSelections?: number
+
+  /** media elements only. */
+  mediaUrl?: string
+  mediaAlt?: string
+
+  /**
+   * Marks an ordinary question as a data-quality instrument. Failing one flags
+   * the session and never ends it - see src/lib/quality.ts.
+   */
+  qualityCheck?: QualityCheck
+}
+
+export interface QualityCheck {
+  kind: 'attention' | 'red_herring' | 'duplicate' | 'gibberish'
+  expect?: number[]
+  of?: string
 }
 
 /** Not a matrix. Row codes start at 1, so 0 can mean "no row". */
@@ -218,6 +262,9 @@ export function terminatedBy(
   answers: Answers
 ): Question | null {
   for (const question of visibleQuestions(questions, answers)) {
+    // A terminal element ends things by being reached at all. Its show_if is
+    // the routing: "if they got this far, they are done."
+    if (question.type === 'terminal') return question
     if (question.terminateIf && evaluate(question.terminateIf, answers)) {
       return question
     }
@@ -278,6 +325,9 @@ export function validateAnswer(
   question: Question,
   answer: AnswerValue | undefined
 ): string | null {
+  // A heading cannot be answered wrongly, or at all.
+  if (!isAnswerable(question.type)) return null
+
   if (!answer) {
     return question.required ? 'This one is needed to continue.' : null
   }
@@ -344,6 +394,11 @@ export function validateAnswer(
       }
       return null
     }
+
+    // Unreachable: isAnswerable already returned for these. Written out so a
+    // type added later fails here rather than falling through as valid.
+    default:
+      return null
   }
 }
 

@@ -11,10 +11,13 @@ import { getQuestions } from '@/lib/survey_store'
  */
 export default async function StudyPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ study: string }>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
   const { study: slug } = await params
+  const search = await searchParams
   const study = await getStudy(slug)
 
   if (!study || study.mode !== 'full_service') {
@@ -37,6 +40,9 @@ export default async function StudyPage({
         studyName={study.name}
         sources={study.sources}
         questions={questions}
+        query={Object.fromEntries(
+          Object.entries(search).map(([k, v]) => [k, Array.isArray(v) ? v[0] : (v ?? '')])
+        )}
         disclosureVersion={
           process.env.NEXT_PUBLIC_DISCLOSURE_VERSION ?? 'unversioned'
         }

@@ -2,6 +2,8 @@ import type { NextRequest } from 'next/server'
 import { getStudy } from '@/lib/studies'
 import { dbConfigured } from '@/lib/db'
 import { findOrCreateSession, recordConsent } from '@/lib/sessions'
+import { variablesFor, persistVariables } from '@/lib/variables_store'
+import { readHidden } from '@/lib/variables'
 
 /**
  * Records what the respondent agreed to, before anything is collected.
@@ -39,7 +41,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Malformed JSON.' }, { status: 400 })
   }
 
-  const { studySlug, respondentId, grants, disclosureVersion, comprehensionPassed } =
+  const { studySlug, respondentId, grants, disclosureVersion, comprehensionPassed, query } =
     (body ?? {}) as Record<string, unknown>
 
   if (typeof studySlug !== 'string' || !(await getStudy(studySlug))) {
@@ -82,6 +84,22 @@ export async function POST(request: NextRequest) {
       disclosureVersion,
       comprehensionPassed === true
     )
+    // Hidden variables ride in on the link, so consent is the only moment they
+    // are reliably available - a respondent who comes back tomorrow arrives at
+    // a bare URL. Stored here, never shown, and never allowed to fail the
+    // consent record itself.
+    if (query && typeof query === 'object' && !Array.isArray(query)) {
+      try {
+        const defined = await variablesFor(studySlug)
+        await persistVariables(
+          session.id,
+          readHidden(defined, query as Record<string, string>)
+        )
+      } catch (error) {
+        console.error('hidden variables failed', error)
+      }
+    }
+
     return Response.json(
       { recorded: true, sessionId: session.id },
       { status: 200 }

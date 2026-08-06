@@ -19,6 +19,7 @@ import {
   scalePoints,
   terminatedBy,
   validateAnswer,
+  isAnswerable,
   MAX_TEXT_ANSWER,
   OTHER_CODE,
   PREFER_NOT_CODE,
@@ -168,6 +169,61 @@ function QuestionField({
   onAnswer: (value: AnswerValue | undefined) => void
   problem: string | null
 }) {
+  // Shown, not asked. No legend, no "optional", nothing to get wrong - a
+  // heading wrapped in a fieldset reads to a screen reader as a question with
+  // no answers, which is worse than no markup at all.
+  if (!isAnswerable(question.type)) {
+    switch (question.type) {
+      case 'section':
+        return (
+          <div className="border-b border-neutral-200 pb-3">
+            <h2 className="text-lg font-semibold tracking-tight">
+              {question.prompt}
+            </h2>
+            {question.help && (
+              <p className="mt-1 max-w-prose text-sm text-neutral-600">
+                {question.help}
+              </p>
+            )}
+          </div>
+        )
+      case 'description':
+        return (
+          <div className="max-w-prose whitespace-pre-wrap text-neutral-700">
+            {question.prompt}
+          </div>
+        )
+      case 'media':
+        return (
+          <figure>
+            {/* Author-supplied URL, so plain img: next/image wants a known
+                host list and this one is configured per study. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={question.mediaUrl}
+              alt={question.mediaAlt ?? ''}
+              className="max-w-full rounded-lg border border-neutral-200"
+            />
+            {question.prompt && (
+              <figcaption className="mt-2 text-sm text-neutral-600">
+                {question.prompt}
+              </figcaption>
+            )}
+          </figure>
+        )
+      case 'terminal':
+        // Reaching one ends the interview, which the flow handles. If it is
+        // ever rendered, say something rather than showing a blank.
+        return (
+          <p className="max-w-prose text-neutral-700">
+            {question.prompt || 'Thank you - that is everything we needed.'}
+          </p>
+        )
+      default:
+        return null
+    }
+  }
+
   return (
     <fieldset>
       <legend className="text-lg font-medium tracking-tight">

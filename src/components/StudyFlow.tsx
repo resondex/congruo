@@ -61,6 +61,12 @@ interface Props {
   sources: SourceKind[]
   disclosureVersion: string
   questions: Question[]
+  /**
+   * The link's query string. Hidden variables are read from it at consent,
+   * which is the only moment it is reliably there - somebody returning
+   * tomorrow arrives at a bare URL.
+   */
+  query?: Record<string, string>
   window?: { from?: Date; to?: Date }
 }
 
@@ -125,6 +131,7 @@ export default function StudyFlow({
   sources,
   disclosureVersion,
   questions,
+  query,
   window: studyWindow,
 }: Props) {
   const store = storeFor(studySlug)
@@ -162,6 +169,7 @@ export default function StudyFlow({
           studySlug,
           disclosureVersion,
           comprehensionPassed: true,
+          query,
           grants: sources.map((source) => ({
             source,
             granted: granted.includes(source),

@@ -4,7 +4,17 @@ import { currentUser } from '@/lib/auth'
 import { replaceQuestions, type QuestionInput } from '@/lib/studies_admin'
 import { isCondition } from '@/lib/conditions'
 
-const TYPES = ['single', 'multiple', 'scale', 'number', 'text']
+const TYPES = [
+  'single',
+  'multiple',
+  'scale',
+  'number',
+  'text',
+  'section',
+  'description',
+  'media',
+  'terminal',
+]
 
 function readQuestion(raw: unknown, index: number): QuestionInput | { error: string } {
   if (typeof raw !== 'object' || raw === null) {
@@ -86,6 +96,9 @@ function readQuestion(raw: unknown, index: number): QuestionInput | { error: str
     minSelections: num(q.minSelections),
     maxSelections: num(q.maxSelections),
     matrixRows: null,
+    mediaUrl: str(q.mediaUrl),
+    mediaAlt: str(q.mediaAlt),
+    qualityCheck: (q.qualityCheck as Record<string, unknown>) ?? null,
     claim: (q.claim as Record<string, unknown>) ?? null,
     showIf: (q.showIf as Record<string, unknown>) ?? null,
     terminateIf: (q.terminateIf as Record<string, unknown>) ?? null,

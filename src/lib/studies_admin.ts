@@ -127,7 +127,16 @@ export interface QuestionInput {
   code: string
   position: number
   page: number
-  type: 'single' | 'multiple' | 'scale' | 'number' | 'text'
+  type:
+    | 'single'
+    | 'multiple'
+    | 'scale'
+    | 'number'
+    | 'text'
+    | 'section'
+    | 'description'
+    | 'media'
+    | 'terminal'
   prompt: string
   help: string | null
   options: { code: number; label: string; mapsTo?: string; exclusive?: boolean }[]
@@ -136,6 +145,9 @@ export interface QuestionInput {
   minSelections: number | null
   maxSelections: number | null
   matrixRows: { code: number; label: string }[] | null
+  mediaUrl: string | null
+  mediaAlt: string | null
+  qualityCheck: Record<string, unknown> | null
   required: boolean
   min: number | null
   max: number | null
@@ -190,9 +202,14 @@ export async function replaceQuestions(
     }
     if (codes.has(q.code)) return { error: `Two questions share the code ${q.code}.` }
     codes.add(q.code)
-    if (!q.prompt.trim()) return { error: `${q.code} has no question text.` }
+    if (!q.prompt.trim() && q.type !== 'media') {
+      return { error: `${q.code} has no text.` }
+    }
     if ((q.type === 'single' || q.type === 'multiple') && !q.options.length) {
       return { error: `${q.code} needs at least one option.` }
+    }
+    if (q.type === 'media' && !q.mediaUrl) {
+      return { error: `${q.code} is an image with no image.` }
     }
   }
 
@@ -215,6 +232,9 @@ export async function replaceQuestions(
           allow_prefer_not_to_say: q.allowPreferNotToSay,
           min_selections: q.minSelections,
           max_selections: q.maxSelections,
+          media_url: q.mediaUrl,
+          media_alt: q.mediaAlt,
+          quality_check: q.qualityCheck ? tx.json(q.qualityCheck as never) : null,
           required: q.required,
           min_value: q.min,
           max_value: q.max,

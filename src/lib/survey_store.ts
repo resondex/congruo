@@ -5,6 +5,7 @@ import {
   NO_ROW,
   type Answers,
   type Claim,
+  type QualityCheck,
   type Question,
   type QuestionOption,
   type QuestionType,
@@ -39,6 +40,9 @@ interface QuestionRow {
   claim: Claim | null
   show_if: unknown
   terminate_if: unknown
+  media_url: string | null
+  media_alt: string | null
+  quality_check: QualityCheck | null
 }
 
 /**
@@ -78,6 +82,9 @@ function fromRow(row: QuestionRow): Question {
     claim: row.claim ?? undefined,
     showIf: readCondition(row.show_if, row.code, 'show_if'),
     terminateIf: readCondition(row.terminate_if, row.code, 'terminate_if'),
+    mediaUrl: row.media_url ?? undefined,
+    mediaAlt: row.media_alt ?? undefined,
+    qualityCheck: row.quality_check ?? undefined,
   }
 }
 
@@ -93,7 +100,8 @@ export async function getQuestions(studySlug: string): Promise<Question[]> {
     select code, position, page, type, prompt, help, options, required,
            min_value, max_value, min_label, max_label, claim,
            show_if, terminate_if, matrix_rows, allow_other,
-           allow_prefer_not_to_say, min_selections, max_selections
+           allow_prefer_not_to_say, min_selections, max_selections,
+           media_url, media_alt, quality_check
     from survey_questions
     where study_slug = ${studySlug}
     order by position
